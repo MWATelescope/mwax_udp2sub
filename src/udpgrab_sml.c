@@ -171,6 +171,8 @@ int UDPport = 59000;                                    // UDP port to listen to
 uint32_t start_capture_time = 0;                        // Unless overridden on the command line, start capture immediately
 uint32_t end_capture_time = 2147000000;                 // Unless overridden on the command line, end capture a long time in the future
 
+uint32_t first_gps_start_capture_time = 0;
+
 int numanode = 0;                                       // which Numa node to force memory allocations on.
 //INT64 UDP_num_slots = 256;                           // default to 4096 UDP slots in the buffer
 //INT64 UDP_num_slots = 4096;                           // default to 4096 UDP slots in the buffer
@@ -464,6 +466,12 @@ void *UDP_parse2sub()
           my_udp->rf_input = ntohs( my_udp->rf_input );                 // exists on the wire as big-endian, we need to make it little-endian
           my_udp->subsec_time = ntohs( my_udp->subsec_time );           // exists on the wire as big-endian, we need to make it little-endian
           my_udp->GPS_time = ntohl( my_udp->GPS_time );                 // exists on the wire as big-endian, we need to make it little-endian
+
+          if (start_capture_time == 0)
+          {
+            start_capture_time = my_udp->GPS_time;
+            end_capture_time = my_udp->GPS_time + 8;
+          }
 
           if ( ( my_udp->GPS_time == CLOSEDOWN ) ||			// If we've been asked to close down via a udp packet with the time set to the year 2106
                 ( my_udp->GPS_time > ( end_capture_time + 8 ) ) ) {	// or we're so far past the time we're interested in that it's pointless to keep checking
