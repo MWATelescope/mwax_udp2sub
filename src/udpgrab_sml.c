@@ -466,7 +466,7 @@ void *UDP_parse2sub()
           my_udp->GPS_time = ntohl( my_udp->GPS_time );                 // exists on the wire as big-endian, we need to make it little-endian
 
           if ( ( my_udp->GPS_time == CLOSEDOWN ) ||			// If we've been asked to close down via a udp packet with the time set to the year 2106
-                ( my_udp->GPS_time > ( ls + 8 ) ) ) {	// or we're so far past the time we're interested in that it's pointless to keep checking
+                ( my_udp->GPS_time > ( end_capture_time + 8 ) ) ) {	// or we're so far past the time we're interested in that it's pointless to keep checking
 
             terminate = TRUE;                                           // tell everyone to shut down
             UDP_removed_from_buff++;                                    // Increment the number of packets we've ever processed to ensure we don't see this closedown packet again (forever?)
