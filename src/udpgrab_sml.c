@@ -469,8 +469,8 @@ void *UDP_parse2sub()
 
           if (start_capture_time == 0)
           {
-            start_capture_time = my_udp->GPS_time;
-            end_capture_time = my_udp->GPS_time + 8;
+            start_capture_time = my_udp->GPS_time + 8;
+            end_capture_time = my_udp->GPS_time + 16;
           }
 
           if ( ( my_udp->GPS_time == CLOSEDOWN ) ||			// If we've been asked to close down via a udp packet with the time set to the year 2106
