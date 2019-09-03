@@ -743,7 +743,7 @@ int main(int argc, char **argv)
     if ( correlate ) {                                                  // Are we going to generate sub files for the correlator
       pthread_create(&UDP_parse_pt,NULL,UDP_parse2sub,NULL);            // then we need this thread
     } else {                                                            // or is it just writing to disk of the screen
-      pthread_create(&UDP_parse_pt,NULL,UDP_parse,NULL);                // in which case the old one is fine
+      //pthread_create(&UDP_parse_pt,NULL,UDP_parse,NULL);                // in which case the old one is fine
     }
 
     sleep(1);
@@ -751,7 +751,7 @@ int main(int argc, char **argv)
     if ( readfile[0] == 0x00 ) {                                        // Are we reading the udp packets in from a multicast port
       pthread_create(&UDP_recv_pt,NULL,UDP_recv,NULL);                  // then this is the right receive function
     } else {                                                            // or is it reading from a disk file
-      pthread_create(&UDP_recv_pt,NULL,UDP_recv_disk,NULL);             // in which case we want this one
+      //pthread_create(&UDP_recv_pt,NULL,UDP_recv_disk,NULL);             // in which case we want this one
     }
 
     while(!terminate) sleep(1);                 // The master thread currently does nothing! Zip! Nada!  What a waste eh?
