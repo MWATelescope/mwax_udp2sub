@@ -478,7 +478,7 @@ void *UDP_parse2sub()
 
           if (start_capture_time == 0)
           {
-            start_capture_time = my_udp->GPS_time + 8;
+            start_capture_time = my_udp->GPS_time + 10;
             end_capture_time = start_capture_time + 7;    // 7 because >=
           }
 
@@ -490,7 +490,30 @@ void *UDP_parse2sub()
             break;                                                      // and exit the 'for' loop early in case there are any more packets.  We'll terminate soon enough.
           }
 
-          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time) ) {         // It's for this sub file
+          // check if this packet belongs to the previous sub file
+          if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8) )
+          {
+            sub_order = input_mapping[ my_udp->rf_input ];
+            if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
+
+            sub_offset = FILE_HEADER_SIZE + BLOCK_SIZE
+                + ( my_udp->GPS_time - (start_capture_time - 8) ) * SEC_OFFSET
+                + ( my_udp->subsec_time / 25 ) * BLOCK_SIZE
+                + ( my_udp->subsec_time % 25 ) * PACKET_OFFSET
+                + sub_order * LINE_OFFSET;
+
+            if ( sub_offset > largest_offset ) {
+              largest_offset = sub_offset;
+              printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - (start_capture_time - 8) ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
+            }
+
+            count_written++;
+            memcpy((void *)(previous_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
+          }
+
+          // check if this packet belongs to the current sub file
+          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time) )
+          {
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
 
@@ -518,6 +541,28 @@ void *UDP_parse2sub()
             memcpy((void *)(current_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
 
           }
+
+          // check if this packet belongs to the next sub file
+          if ( ( my_udp->GPS_time >= (start_capture_time + 8)) && ( my_udp->GPS_time <= (end_capture_time + 8) )
+          {
+            sub_order = input_mapping[ my_udp->rf_input ];
+            if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
+
+            sub_offset = FILE_HEADER_SIZE + BLOCK_SIZE
+                + ( my_udp->GPS_time - (start_capture_time + 8) ) * SEC_OFFSET
+                + ( my_udp->subsec_time / 25 ) * BLOCK_SIZE
+                + ( my_udp->subsec_time % 25 ) * PACKET_OFFSET
+                + sub_order * LINE_OFFSET;
+
+            if ( sub_offset > largest_offset ) {
+              largest_offset = sub_offset;
+              printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - (start_capture_time + 8) ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
+            }
+
+            count_written++;
+            memcpy((void *)(next_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
+          }
+
 
           UDP_removed_from_buff++;                                      // Increment the number of packets we've ever processed (which automatically releases them from the buffer).
 
