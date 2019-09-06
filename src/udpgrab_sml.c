@@ -489,7 +489,7 @@ void *UDP_parse2sub()
             UDP_removed_from_buff++;                                    // Increment the number of packets we've ever processed to ensure we don't see this closedown packet again (forever?)
             break;                                                      // and exit the 'for' loop early in case there are any more packets.  We'll terminate soon enough.
           }
-
+#if 0
           // check if this packet belongs to the previous sub file
           if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8) )
           {
@@ -562,7 +562,7 @@ void *UDP_parse2sub()
             count_written++;
             memcpy((void *)(next_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
           }
-
+#endif
 
           UDP_removed_from_buff++;                                      // Increment the number of packets we've ever processed (which automatically releases them from the buffer).
 
