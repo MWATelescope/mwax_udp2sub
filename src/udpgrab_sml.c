@@ -225,10 +225,10 @@ char *local_interface;
 #define PACKET_OFFSET (4096LL)
 #define LINE_OFFSET (102400LL)
 
-// Three buffers that together form a 3-element ring buffer for assembling successive sub files
-INT8 * sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));  // PSRDADA header plus metadata block plus 200 40ms blocks
-INT8 * sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
-INT8 * sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+// Pointers to three buffers that together will form a 3-element ring buffer for assembling successive sub files
+INT8 * sub_a;
+INT8 * sub_b;
+INT8 * sub_c;
 
 
 //===================================================================================================================================================
@@ -737,6 +737,11 @@ int main(int argc, char **argv)
     } else {
       printf ( "error %d deleting file\n", errno );
     }
+
+    // allocate three buffers for assembling sub files
+    sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));  // PSRDADA header plus metadata block plus 200 40ms blocks
+    sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+    sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
 
     msgvecs = calloc( 2 * UDP_num_slots, sizeof(struct mmsghdr) );      // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
     iovecs = calloc( UDP_num_slots, sizeof(struct iovec) );             // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
