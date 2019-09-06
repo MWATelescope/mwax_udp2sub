@@ -514,7 +514,7 @@ void *UDP_parse2sub()
             }
 #endif
             // replace with writing to current sub buffer
-            memcpy((void *)(current_sub_buffer + sub_offset), const (void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
+            memcpy((void *)(current_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
 
           }
 
