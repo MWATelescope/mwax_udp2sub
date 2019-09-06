@@ -491,7 +491,7 @@ void *UDP_parse2sub()
           }
 
           // check if this packet belongs to the previous sub file
-          if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8)))
+          if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8)) )
           {
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
@@ -512,7 +512,7 @@ void *UDP_parse2sub()
           }
 
           // check if this packet belongs to the current sub file
-          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time)))
+          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time) )
           {
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
@@ -543,7 +543,7 @@ void *UDP_parse2sub()
           }
 
           // check if this packet belongs to the next sub file
-          if ( ( my_udp->GPS_time >= (start_capture_time + 8)) && ( my_udp->GPS_time <= (end_capture_time + 8)))
+          if ( ( my_udp->GPS_time >= (start_capture_time + 8)) && ( my_udp->GPS_time <= (end_capture_time + 8)) )
           {
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
