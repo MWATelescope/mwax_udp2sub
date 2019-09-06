@@ -493,6 +493,7 @@ void *UDP_parse2sub()
           // check if this packet belongs to the previous sub file
           if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8) )
           {
+#if 0
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
 
@@ -506,7 +507,7 @@ void *UDP_parse2sub()
               largest_offset = sub_offset;
               printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - (start_capture_time - 8) ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
             }
-
+#endif
             count_written++;
             memcpy((void *)(previous_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
           }
