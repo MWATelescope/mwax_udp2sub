@@ -229,6 +229,9 @@ char *local_interface;
 INT8 * sub_a;
 INT8 * sub_b;
 INT8 * sub_c;
+INT8 * previous_sub_buffer;
+INT8 * current_sub_buffer;
+INT8 * next_sub_buffer;
 
 
 //===================================================================================================================================================
@@ -438,12 +441,12 @@ void *UDP_parse2sub()
 
 // Example source file rawdump_1248519616_09.raw
 
-    int filedesc = open( sub_file, O_WRONLY | O_CREAT | O_EXCL , S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IROTH );
+    //int filedesc = open( sub_file, O_WRONLY | O_CREAT | O_EXCL , S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IROTH );
 
-    if (filedesc == -1) {
-      perror("UDP_parse2sub: File create failed\n");
-      terminate = TRUE;
-    }
+    //if (filedesc == -1) {
+      //perror("UDP_parse2sub: File create failed\n");
+      //terminate = TRUE;
+    //}
 
 //---------------- Main loop to provide udp packets -------------------
 
@@ -502,12 +505,16 @@ void *UDP_parse2sub()
               printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - start_capture_time ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
             }
 
+#if 0       // remove direct writing to file
             lseek( filedesc, sub_offset, SEEK_SET );
             count_written++;
 
             if ( write( filedesc, my_udp->payload, PAYLOAD_SIZE ) != PAYLOAD_SIZE ) {
               printf( "Incomplete write\n" );                           // Theoretically an incomplete write is allowed and we should just continue, but it's probably a full disk so let's escape
             }
+#endif
+            // replace with writing to current sub buffer
+            memcpy((void *)current_sub_buffer[sub_offset], const (void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
 
           }
 
@@ -523,7 +530,7 @@ void *UDP_parse2sub()
 
     }
 
-    close( filedesc );
+    //close( filedesc );
 
     printf( "looped on empty %lld times\n", Num_loops_when_empty );
     printf( "processed %lld packets\n", UDP_removed_from_buff );
@@ -742,6 +749,9 @@ int main(int argc, char **argv)
     sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));  // PSRDADA header plus metadata block plus 200 40ms blocks
     sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
     sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+    previous_sub_buffer = sub_c;
+    current_sub_buffer = sub_a;
+    next_sub_buffer = sub_b;
 
     msgvecs = calloc( 2 * UDP_num_slots, sizeof(struct mmsghdr) );      // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
     iovecs = calloc( UDP_num_slots, sizeof(struct iovec) );             // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
