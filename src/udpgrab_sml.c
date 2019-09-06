@@ -225,6 +225,15 @@ char *local_interface;
 #define PACKET_OFFSET (4096LL)
 #define LINE_OFFSET (102400LL)
 
+// Pointers to three buffers that together will form a 3-element ring buffer for assembling successive sub files
+INT8 * sub_a;
+INT8 * sub_b;
+INT8 * sub_c;
+INT8 * previous_sub_buffer;
+INT8 * current_sub_buffer;
+INT8 * next_sub_buffer;
+
+
 //===================================================================================================================================================
 // THREAD BLOCK.  The following functions are complete threads
 //===================================================================================================================================================
@@ -432,12 +441,12 @@ void *UDP_parse2sub()
 
 // Example source file rawdump_1248519616_09.raw
 
-    int filedesc = open( sub_file, O_WRONLY | O_CREAT | O_EXCL , S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IROTH );
+    //int filedesc = open( sub_file, O_WRONLY | O_CREAT | O_EXCL , S_IRUSR | S_IWUSR | S_IWGRP | S_IRGRP | S_IROTH );
 
-    if (filedesc == -1) {
-      perror("UDP_parse2sub: File create failed\n");
-      terminate = TRUE;
-    }
+    //if (filedesc == -1) {
+      //perror("UDP_parse2sub: File create failed\n");
+      //terminate = TRUE;
+    //}
 
 //---------------- Main loop to provide udp packets -------------------
 
@@ -469,7 +478,7 @@ void *UDP_parse2sub()
 
           if (start_capture_time == 0)
           {
-            start_capture_time = my_udp->GPS_time + 8;
+            start_capture_time = my_udp->GPS_time + 10;
             end_capture_time = start_capture_time + 7;    // 7 because >=
           }
 
@@ -481,7 +490,30 @@ void *UDP_parse2sub()
             break;                                                      // and exit the 'for' loop early in case there are any more packets.  We'll terminate soon enough.
           }
 
-          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time) ) {         // It's for this sub file
+          // check if this packet belongs to the previous sub file
+          if ( ( my_udp->GPS_time >= (start_capture_time - 8)) && ( my_udp->GPS_time <= (end_capture_time - 8)) )
+          {
+            sub_order = input_mapping[ my_udp->rf_input ];
+            if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
+
+            sub_offset = FILE_HEADER_SIZE + BLOCK_SIZE
+                + ( my_udp->GPS_time - (start_capture_time - 8) ) * SEC_OFFSET
+                + ( my_udp->subsec_time / 25 ) * BLOCK_SIZE
+                + ( my_udp->subsec_time % 25 ) * PACKET_OFFSET
+                + sub_order * LINE_OFFSET;
+
+            if ( sub_offset > largest_offset ) {
+              largest_offset = sub_offset;
+              printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - (start_capture_time - 8) ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
+            }
+
+            count_written++;
+            memcpy((void *)(previous_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
+          }
+
+          // check if this packet belongs to the current sub file
+          if ( ( my_udp->GPS_time >= start_capture_time) && ( my_udp->GPS_time <= end_capture_time) )
+          {
             sub_order = input_mapping[ my_udp->rf_input ];
             if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
 
@@ -496,13 +528,39 @@ void *UDP_parse2sub()
               printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - start_capture_time ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
             }
 
+#if 0       // remove direct writing to file
             lseek( filedesc, sub_offset, SEEK_SET );
             count_written++;
 
             if ( write( filedesc, my_udp->payload, PAYLOAD_SIZE ) != PAYLOAD_SIZE ) {
               printf( "Incomplete write\n" );                           // Theoretically an incomplete write is allowed and we should just continue, but it's probably a full disk so let's escape
             }
+#endif
+            // replace with writing to current sub buffer
+            count_written++;
+            memcpy((void *)(current_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
 
+          }
+
+          // check if this packet belongs to the next sub file
+          if ( ( my_udp->GPS_time >= (start_capture_time + 8)) && ( my_udp->GPS_time <= (end_capture_time + 8)) )
+          {
+            sub_order = input_mapping[ my_udp->rf_input ];
+            if ( sub_order >= 256 ) printf ( "Error found an rf_input I can't explain. rfi=%d, so=%d\n", my_udp->rf_input, sub_order );
+
+            sub_offset = FILE_HEADER_SIZE + BLOCK_SIZE
+                + ( my_udp->GPS_time - (start_capture_time + 8) ) * SEC_OFFSET
+                + ( my_udp->subsec_time / 25 ) * BLOCK_SIZE
+                + ( my_udp->subsec_time % 25 ) * PACKET_OFFSET
+                + sub_order * LINE_OFFSET;
+
+            if ( sub_offset > largest_offset ) {
+              largest_offset = sub_offset;
+              printf( "F=%d,T=%d:%d,ord[%d]=%d,off=%lld\n", my_udp->freq_channel, ( my_udp->GPS_time - (start_capture_time + 8) ), my_udp->subsec_time, my_udp->rf_input, sub_order, sub_offset );
+            }
+
+            count_written++;
+            memcpy((void *)(next_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
           }
 
           UDP_removed_from_buff++;                                      // Increment the number of packets we've ever processed (which automatically releases them from the buffer).
@@ -517,7 +575,7 @@ void *UDP_parse2sub()
 
     }
 
-    close( filedesc );
+    //close( filedesc );
 
     printf( "looped on empty %lld times\n", Num_loops_when_empty );
     printf( "processed %lld packets\n", UDP_removed_from_buff );
@@ -731,6 +789,14 @@ int main(int argc, char **argv)
     } else {
       printf ( "error %d deleting file\n", errno );
     }
+
+    // allocate three buffers for assembling sub files
+    sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));  // PSRDADA header plus metadata block plus 200 40ms blocks
+    sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+    sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+    previous_sub_buffer = sub_c;
+    current_sub_buffer = sub_a;
+    next_sub_buffer = sub_b;
 
     msgvecs = calloc( 2 * UDP_num_slots, sizeof(struct mmsghdr) );      // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
     iovecs = calloc( UDP_num_slots, sizeof(struct iovec) );             // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
