@@ -562,7 +562,7 @@ void *UDP_parse2sub()
             count_written++;
             memcpy((void *)(next_sub_buffer + sub_offset), (const void *)my_udp->payload, (size_t)PAYLOAD_SIZE);
           }
-
+#endif
           UDP_removed_from_buff++;                                      // Increment the number of packets we've ever processed (which automatically releases them from the buffer).
 
 //---------- End of processing of this UDP packet ----------
@@ -583,7 +583,7 @@ void *UDP_parse2sub()
     printf( "Exiting UDP_parse2sub\n");
     pthread_exit(NULL);
 }
-#endif
+
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
 void sigint_handler(int signo)
