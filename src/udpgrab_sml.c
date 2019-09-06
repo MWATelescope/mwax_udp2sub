@@ -226,9 +226,9 @@ char *local_interface;
 #define LINE_OFFSET (102400LL)
 
 // Three buffers that together form a 3-element ring buffer for assembling successive sub files
-INT8 * sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE);  // PSRDADA header plus metadata block plus 200 40ms blocks
-INT8 * sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE);
-INT8 * sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE);
+INT8 * sub_a = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));  // PSRDADA header plus metadata block plus 200 40ms blocks
+INT8 * sub_b = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
+INT8 * sub_c = (INT8 *)malloc(FILE_HEADER_SIZE + (201*BLOCK_SIZE));
 
 
 //===================================================================================================================================================
