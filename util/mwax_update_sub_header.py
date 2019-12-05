@@ -165,14 +165,6 @@ class MWAMetafitsProcessor:
         self.logger.debug(f"Read number of rf chains (tiles x pols) == {self.ninputs}")
 
     def process(self):
-        # Command
-        if self.mode == "HW_LFILES" or self.mode == "VOLTAGE_START" or mode == "VOLTAGE_BUFFER":
-            self.command = "CAPTURE"
-        elif self.mode == "NO_CAPTURE":
-            self.command = "IDLE"
-        else:
-            self.command = "QUIT"
-
         # UTC Start
         # needs to be in the form: yyyy-mm-dd-hh:mm:ss
         utc_start_datetime = datetime.datetime.strptime(self.datestrt, "%Y-%m-%dT%H:%M:%S")
@@ -223,7 +215,7 @@ class MWAMetafitsProcessor:
         output += f"POPULATED 1\n"
         output += f"OBS_ID {self.gpstime}\n"
         output += f"SUBOBS_ID {self.subobs_id}\n"
-        output += f"COMMAND {self.command}\n"
+        output += f"MODE {self.mode}\n"
         output += f"UTC_START {self.utc_start}\n"
         output += f"OBS_OFFSET {self.obs_offset}\n"
         output += f"NBIT 8\n"
