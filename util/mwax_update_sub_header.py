@@ -25,16 +25,18 @@ class MWAMetafitsProcessor:
         # Now remove the extension
         subfilename_filename_noext = os.path.splitext(subfilename_nopath)[0]
 
-        # Check this seems ok- 10 digit integer
+        # Check this seems ok- should be in the form of gpstime_CH.sub e.g.
+        #                                               1234567890_09.sub
         self.subobs_id = None
 
-        if len(subfilename_filename_noext) != 10:
-            raise Exception(f"Error: subfilename {subfilename} must be in the form of <gpstime>.sub")
+        if len(subfilename_filename_noext) != 13:
+            raise Exception(f"Error: subfilename {subfilename} must be in the form of <gpstime>_<ch>.sub")
 
         try:
-            self.subobs_id = int(subfilename_filename_noext)
+            self.subobs_id = int(subfilename_filename_noext[0:10])
         except ValueError:
-            raise Exception(f"Error: subfilename {subfilename_nopath} must be in the form of <gpstime>.sub")
+            raise Exception(f"Error: subfilename {subfilename} must be in the form "
+                            f"of <gpstime>_<ch>.sub")
 
         # Now look for metafits file in metafits path which is at or after the subobs_id
         metafits_search = os.path.join(metafits_path, "*.fits")
@@ -85,7 +87,8 @@ class MWAMetafitsProcessor:
 
             else:
                 # The current metafits is out of range and can't be it
-                self.logger.debug(f"Metafits is for AFTER the subobs {self.subobs_id} vs metafitsid={this_metafits_obs_id}")
+                self.logger.debug(f"Metafits is for AFTER the subobs {self.subobs_id} "
+                                  f"vs metafitsid={this_metafits_obs_id}")
 
         # We've looped through all metafits- was it found?
         if self.metafits_filename is None:
