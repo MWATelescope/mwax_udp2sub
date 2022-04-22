@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.03d-070    2021-11-09 GJS  Update to add breakthrough listen compute node to the channel mapping struct
+//
 // 2.03c-069    2021-10-26 BWC  Change mwax05 to CC25 (ie stop it from seeing data)
 //				Yet to do: "Also grab RAWSCALE from metafits and stick it in as is into the PSRDADA header.  It’s a decimal value (float?)"
 //
@@ -176,8 +178,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 69
-#define THISVER "2.03c"
+#define BUILD 70 
+#define THISVER "2.03d"
 
 #define _GNU_SOURCE
 
@@ -420,7 +422,7 @@ udp2sub_config_t conf;                          // A place to store the configur
 void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config )
 {
 
-#define MAXINSTANCE (27)
+#define MAXINSTANCE (28)
 
     int instance_ndx = 0;                                                                       // Start out assuming we don't appear in the list
 
@@ -454,6 +456,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
       ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 5,"239.255.90.5" ,59005}
       ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",12,"239.255.90.12",59012}
+      ,{27,"blc00" ,0,3500000,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.240",12,"239.255.90.12",59012}
 
 //      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
 //      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",9,"239.255.90.9",59009}
