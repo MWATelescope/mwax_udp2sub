@@ -4,6 +4,11 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.04a-075    2022-03-16 BWC  Improve reading of metafits files
+//				Add mwax101 back in for development support
+//				Count the number of free files of the wrong size and log it.  (More important now we run !=128T)
+//				Log the number of rf_inputs in each subobs and show 'wanted', 'saw', and 'common' (ie both seen and wanted)
+//
 // 2.03h-074    2022-03-08 BWC  Change to 112T config (NB: 2.03g-073 was a minor config change GS made)
 //
 // 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration
@@ -184,8 +189,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 74
-#define THISVER "2.03h"
+#define BUILD 75
+#define THISVER "2.04a"
 
 #define _GNU_SOURCE
 
@@ -296,6 +301,32 @@ mon->sub_write_dummy++;                                         // record we nee
 
 //---------------- internal structure definitions --------------------
 
+typedef struct tile_meta {				// Structure format for the metadata associated with one rf input for one subobs
+
+    int Input;
+    int Antenna;
+    int Tile;
+    char TileName[9];					// Leave room for a null on the end!
+    char Pol[2];					// Leave room for a null on the end!
+    int Rx;
+    int Slot;
+    int Flag;
+    char Length[15];
+    float North;
+    float East;
+    float Height;
+    int Gains[24];
+    float BFTemps;
+    int Delays[16];
+//    int VCSOrder;
+    char Flavors[11];
+    float Calib_Delay;
+    float Calib_Gains[24];
+
+    uint16_t rf_input;					// What's the tile & pol identifier we'll see in the udp packets for this input?
+
+} tile_meta_t;
+
 typedef struct subobs_udp_meta {                        // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets
 
     volatile uint32_t subobs;                           // The sub observation number.  ie the GPS time of the first second in this sub-observation
@@ -335,26 +366,11 @@ typedef struct subobs_udp_meta {                        // Structure format for 
 
     uint16_t rf_seen;                                   // The number of different rf_input sources seen so far this sub observation
     uint16_t rf2ndx[65536];                             // A mapping from the rf_input value to what row in the pointer array its pointers are stored
-    char *udp_volts[MAX_INPUTS][UDP_PER_RF_PER_SUB];    // array of pointers to every udp packet's payload that may be needed for this sub-observation
+    char *udp_volts[MAX_INPUTS+1][UDP_PER_RF_PER_SUB];    // array of pointers to every udp packet's payload that may be needed for this sub-observation.  NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
+
+    tile_meta_t rf_inp[MAX_INPUTS];			// Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file, NOT the order udp packets were seen in.
 
 } subobs_udp_meta_t;
-
-//---------- A structure of information from the metafits/metabin but which needs modification at run-time ----------
-/*
-typedef struct MandC_obs {                              // Structure format for the header MWA obs and subobservation metadata
-
-    INT64 GPSTIME;                                      // Following fields are straight from the metafits file (via the metabin)
-    int EXPOSURE;
-    char PROJECT[32];
-    char MODE[32];
-    int CHANNELS[100];
-    int FINECHAN_hz;
-    int INTTIME_msec;
-    int NINPUTS;
-    INT64 UNIXTIME;
-
-} MandC_obs_t;
-*/
 
 typedef struct MandC_meta {                             // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets.  Array with one entry per rf_input
 
@@ -428,7 +444,7 @@ udp2sub_config_t conf;                          // A place to store the configur
 void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config )
 {
 
-#define MAXINSTANCE (28)
+#define MAXINSTANCE (29)
 
     int instance_ndx = 0;                                                                       // Start out assuming we don't appear in the list
 
@@ -467,7 +483,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
 //      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
 //      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",9,"239.255.90.9",59009}
 
-//      ,{2,"mwax101",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.191",10,"239.255.90.10",59010}
+      ,{28,"mwax101",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.191",10,"239.255.90.10",59010}
 //      ,{3,"mwax102",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.192",11,"239.255.90.11",59011}
 //      ,{4,"mwax103",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.193",12,"239.255.90.12",59012}
 
@@ -851,7 +867,7 @@ void *UDP_parse()
         rf_ndx = this_sub->rf2ndx[ my_udp->rf_input ];                  // Look up the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on a different sub
 
         if ( rf_ndx == 0 ) {                                            // If the lookup for this rf input for this sub is still a zero, it means this is the first time we've seen one this sub from this rf input
-          this_sub->rf_seen++;                                          // Increase the number of different rf inputs seen so far
+          this_sub->rf_seen++;                                          // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
           this_sub->rf2ndx[ my_udp->rf_input ] = this_sub->rf_seen;     // and assign that number for this rf input's metadata index
           rf_ndx = this_sub->rf_seen;                                   // and get the correct index for this packet too because we'll need that
         }       // WIP Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
@@ -1083,19 +1099,13 @@ void add_meta_fits()
               fflush(stdout);
             }
 
-// strcpy( subm->MODE, "NO_CAPTURE" );                  // Testing hack.  Needs to be removed to really track the existing correlator
+//if ( strstr( subm->FILENAME, "mwax_vcs" ) != NULL ) {   // If the FILENAME (obsname) contains mwax_vcs then
+//  strcpy( subm->MODE, "VOLTAGE_START" );                // change mode to VOLTAGE_START
+//}
 
-if ( strstr( subm->FILENAME, "mwax_vcs" ) != NULL ) {   // If the FILENAME (obsname) contains mwax_vcs then
-  strcpy( subm->MODE, "VOLTAGE_START" );                // change mode to VOLTAGE_START
-}
-
-if ( strstr( subm->FILENAME, "mwax_corr" ) != NULL ) {  // If the FILENAME (obsname) contains mwax_corr then
-  strcpy( subm->MODE, "HW_LFILES" );                    // change mode to HW_LFILES
-}
-
-//           if ( strcmp( subm->MODE, "NO_CAPTURE" ) == 0 ) {                                           // If the mode according to M&C is NO_CAPTURE
-//            strcpy( subm->MODE, "HW_LFILES" );                                                        // change it to HW_LFILES
-//          }
+//if ( strstr( subm->FILENAME, "mwax_corr" ) != NULL ) {  // If the FILENAME (obsname) contains mwax_corr then
+//  strcpy( subm->MODE, "HW_LFILES" );                    // change mode to HW_LFILES
+//}
 
             if ( (subm->GPSTIME + (INT64)subm->EXPOSURE - 1) < (INT64)subm->subobs ) {                  // If the last observation has expired. (-1 because inclusive)
               strcpy( subm->MODE, "NO_CAPTURE" );                                                       // then change the mode to NO_CAPTURE
@@ -1199,30 +1209,265 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
               printf ( "Failed to read UNIXTIME\n" );
               fflush(stdout);
             }
+            
 
 //---------- We now have everything we need from the 1st HDU ----------
+
+            int hdutype=0;
+//            long naxes[2];
+//            int nfound;
+//            int ncols;
+            int colnum;
+            int anynulls;
+            long nrows;
+            long frow, felem;
+
+
+            int cfitsio_ints[MAX_INPUTS];					// Temp storage for integers read from the metafits file (in metafits order) before copying to final structure (in sub file order)
+            float cfitsio_floats[MAX_INPUTS];					// Temp storage for floats read from the metafits file (in metafits order) before copying to final structure (in sub file order)
+
+            char cfitsio_strings[MAX_INPUTS][15];				// Temp storage for strings read from the metafits file (in metafits order) before copying to final structure (in sub file order)
+            char *cfitsio_str_ptr[MAX_INPUTS];					// We also need an array of pointers to the stings
+            for (int loop = 0; loop < MAX_INPUTS; loop++) {
+              cfitsio_str_ptr[loop] = &cfitsio_strings[loop][0];		// That we need to fill with the addresses of the first character in each string in the list of inputs
+            }
+
+            int metafits2sub_order[MAX_INPUTS];					// index is the position in the metafits file starting at 0.  Value is the order in the sub file starting at 0.
+
+            tile_meta_t *rfm;
+
+            fits_movrel_hdu( fptr, 1 , &hdutype, &status );				// Shift to the next HDU, where the antenna table is
+            if (status) {
+              printf ( "Failed to move to 2nd HDU\n" );
+              fflush(stdout);
+            }
+
 /*
-Get the number of rows:
-  int fits_get_num_rows / ffgnrw
-     (fitsfile *fptr, > long *nrows, int *status);
+            fits_read_keys_lng( fptr, "NAXIS", 1, 2, naxes, &nfound, &status);
+            if (status) {
+              printf ( "Failed to read NAXIS array\n" );
+              fflush(stdout);
+            }
 
-Get the number of cols??:
-  int fits_get_num_cols / ffgncl
-      (fitsfile *fptr, > int *ncols, int *status);
-
- Look up the column number of the fields we want.
- int fits_get_colnum / ffgcno
-      (fitsfile *fptr, int casesen, char *templt, > int *colnum,
-       int *status)
-
-  int fits_get_colname / ffgcnn
-      (fitsfile *fptr, int casesen, char *templt, > char *colname,
-       int *colnum, int *status)
-
-int fits_read_col / ffgcv
-      (fitsfile *fptr, int datatype, int colnum, LONGLONG firstrow, LONGLONG firstelem,
-       LONGLONG nelements, DTYPE *nulval, DTYPE *array, int *anynul, int *status)
+            printf ( "%d:%s,  naxes[0]=%ld,  naxes[1]=%ld\n", subobs_ready2write, metafits_file, naxes[0], naxes[1] );
+            if ( naxes[1] != subm->NINPUTS ) {
+              printf ( "NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, naxes[1] );
+            }
 */
+            fits_get_num_rows( fptr, &nrows, &status );
+            if ( nrows != subm->NINPUTS ) {
+              printf ( "NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, nrows );
+            }
+
+//            fits_get_num_cols( fptr, &ncols, &status );
+
+/*
+        if (look) {
+          for (ii = 1; ii <= ncols; ii++) {
+            fits_make_keyn("TTYPE", ii, keyname, &status);
+            fits_read_key(mfptr, TSTRING, keyname, colname, NULL, &status);
+            fits_make_keyn("TFORM", ii, keyname, &status);
+            fits_read_key(mfptr, TSTRING, keyname, coltype, NULL, &status);
+            printf(" %3d %-16s %-16s\n", ii, colname, coltype);
+          }
+        }
+*/
+
+        frow = 1;
+        felem = 1;
+//        nullval = -99.;
+
+        //read Input key
+//        fits_get_colnum( fptr, CASEINSEN, "Input", &colnum, &status );
+        fits_get_colnum( fptr, CASEINSEN, "Antenna", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+
+//        for (int loop = 0; loop < nrows; loop++) {
+//          printf( "%d,", cfitsio_ints[loop] );
+//        }
+//        printf( "\n" );
+
+        fits_get_colnum( fptr, CASEINSEN, "Pol", &colnum, &status );
+        fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
+
+//        for (int loop = 0; loop < nrows; loop++) {
+//          printf( "%s,", cfitsio_str_ptr[loop] );
+//        }
+//        printf( "\n" );
+
+
+        for (int loop = 0; loop < nrows; loop++) {
+          metafits2sub_order[loop] = ( cfitsio_ints[loop] << 1 ) | ( ( *cfitsio_str_ptr[loop] == 'Y' ) ? 1 : 0 );			// Take the "Antenna" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That's how you know where in the sub file it goes.
+//          printf( "%d,", metafits2sub_order[loop] );
+        }
+//        printf( "\n" );
+
+        // Now we know how to map the the order from the metafits file to the sub file (and internal structure), it's time to start reading in the fields one at a time
+
+
+//---------- write the 'Antenna' and 'Pol' fields -------- NB: These data are sitting in the temporary arrays already, so we don't need to reread them.
+
+        for (int loop = 0; loop < nrows; loop++) {
+          subm->rf_inp[ metafits2sub_order[loop] ].Antenna = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+          strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Pol, cfitsio_str_ptr[loop] );	// Copy each string from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        }
+
+//---------- Read and write the 'Input' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Input", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Input = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Tile' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Tile", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Tile = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'TileName' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "TileName", &colnum, &status );
+        fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].TileName, cfitsio_str_ptr[loop] );
+
+//---------- Read and write the 'Rx' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Rx", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Rx = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Slot' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Slot", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Slot = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Flag' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Flag", &colnum, &status );
+        fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Flag = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Length' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Length", &colnum, &status );
+        fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Length, cfitsio_str_ptr[loop] );
+
+//---------- Read and write the 'North' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "North", &colnum, &status );
+        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].North = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'East' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "East", &colnum, &status );
+        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].East = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Height' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Height", &colnum, &status );
+        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Height = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Gains' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Gains", &colnum, &status );
+        // Gains is a little different because it is an array of ints. We're going to read each row (ie rf input) with a separate cfitsio call. Maybe there's a better way to do this, but I don't know it!
+        for (int loop = 0; loop < nrows; loop++) {
+          fits_read_col( fptr, TINT, colnum, loop+1, felem, 24, 0, subm->rf_inp[ metafits2sub_order[loop] ].Gains, &anynulls, &status );
+        }
+
+//---------- Read and write the 'BFTemps' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "BFTemps", &colnum, &status );
+        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].BFTemps = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Delays' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Delays", &colnum, &status );
+        // Like 'Gains', this is a little different because it is an array of ints. See comments against 'Gains' for more detail
+        for (int loop = 0; loop < nrows; loop++) {
+          fits_read_col( fptr, TINT, colnum, loop+1, felem, 16, 0, subm->rf_inp[ metafits2sub_order[loop] ].Delays, &anynulls, &status );
+        }
+
+//---------- Read and write the 'VCSOrder' field --------
+
+//        fits_get_colnum( fptr, CASEINSEN, "VCSOrder", &colnum, &status );
+//        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+//        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].VCSOrder = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Flavors' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Flavors", &colnum, &status );
+        fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Flavors, cfitsio_str_ptr[loop] );
+
+//---------- Read and write the 'Calib_Delay' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Calib_Delay", &colnum, &status );
+        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Calib_Delay = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+//---------- Read and write the 'Calib_Gains' field --------
+
+        fits_get_colnum( fptr, CASEINSEN, "Calib_Gains", &colnum, &status );
+        // Like 'Gains' and 'Delays, this is an array. This time of floats.
+        for (int loop = 0; loop < nrows; loop++) {
+          fits_read_col( fptr, TFLOAT, colnum, loop+1, felem, 24, 0, subm->rf_inp[ metafits2sub_order[loop] ].Calib_Gains, &anynulls, &status );
+        }
+
+//---------- Now we have read everything available from the 2nd HDU but we want to do some conversions and calculations per tile ----------
+
+        for (int loop = 0; loop < nrows; loop++) {
+          rfm = &subm->rf_inp[ loop ];
+          rfm->rf_input = ( rfm->Tile << 1 ) | ( ( *rfm->Pol == 'Y' ) ? 1 : 0 );			// Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives the content of the 'rf_input' field in the udp packets for this row
+
+/*
+          printf( "%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%s,%f,%f,%f,%f,%s,%f:",
+            loop,
+            rfm->rf_input,
+            rfm->Input,
+            rfm->Antenna,
+            rfm->Tile,
+            rfm->TileName,
+            rfm->Pol,
+            rfm->Rx,
+            rfm->Slot,
+            rfm->Flag,
+            rfm->Length,
+            rfm->North,
+            rfm->East,
+            rfm->Height,
+            // rfm->Gains,
+            rfm->BFTemps,
+            // rfm->Delays,
+//            rfm->VCSOrder,
+            rfm->Flavors,
+            rfm->Calib_Delay
+            //rfm->Calib_Gains
+          );
+
+          for (int loop2 = 0; loop2 < 24; loop2++) {
+            printf( "%d,", rfm->Gains[loop2] );
+          }
+
+          for (int loop2 = 0; loop2 < 16; loop2++) {
+            printf( "%d,", rfm->Delays[loop2] );
+          }
+
+          for (int loop2 = 0; loop2 < 24; loop2++) {
+            printf( "%f,", rfm->Calib_Gains[loop2] );
+          }
+
+          printf( "\n" );
+*/
+        }
+
+
 //---------- We now have everything we need from the fits file ----------
 
             clock_gettime( CLOCK_REALTIME, &ended_meta_write_time);
@@ -1233,10 +1478,6 @@ int fits_read_col / ffgcv
 
 //            printf("meta: so=%d,bcsf=%lld,GPSTIME=%lld,EXPOSURE=%d,PROJECT=%s,MODE=%s,CHANNELS=%s,FINECHAN_hz=%d,INTTIME_msec=%d,NINPUTS=%d,UNIXTIME=%lld,len=%d,st=%d,wait=%d,took=%d\n",
 //              subm->subobs, bcsf_obsid, subm->GPSTIME, subm->EXPOSURE, subm->PROJECT, subm->MODE, subm->CHANNELS, subm->FINECHAN_hz, subm->INTTIME_msec, subm->NINPUTS, subm->UNIXTIME, len, subm->meta_done, subm->meta_msec_wait, subm->meta_msec_took);
-
-//meta: so=1283591768,bcsf=1283585640,GPSTIME=1283585640,EXPOSURE=600,CHANNELS=57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128,129,130,131,132&,len=84,st=5,wait=100,took=0
-//meta: so=1283591776,bcsf=1283585640,GPSTIME=1283585640,EXPOSURE=600,CHANNELS=57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128,129,130,131,132&,len=84,st=5,wait=300,took=0
-//meta: so=1283591784,bcsf=1283585640,GPSTIME=1283585640,EXPOSURE=600,CHANNELS=57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128,129,130,131,132&,len=84,st=5,wait=8008,took=0
 
           }
 
@@ -1282,6 +1523,9 @@ void *makesub()
 
     time_t earliest_file;                                               // Holding space for the date we need to beat when looking for old .free files
     int free_files = 0;                                                 // Count of the number of ".free" files available to use for writing out .sub files
+    int bad_free_files = 0;                                             // Count of the number of ".free" files that *cannot* be used for some reason (probably the wrong size)
+
+    int active_rf_inputs;						// The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
@@ -1329,74 +1573,6 @@ void *makesub()
     struct timespec started_sub_write_time;
     struct timespec ended_sub_write_time;
 
-//---------------- Prepare the hard coded rf_input to correlator order mapping array ------------------------
-
-    UINT16 hc_rf_inputs[256] = {
-
-//      rf_input values in 128T correlator order.  Use to sparce populate a 65536 element back-lookup table.  ie Enter this value, return the correlator order 0-255
-
-//    LONG BASELINE CONFIGURATION *with* RFIpole
-/*
-    102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,
-    142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,
-    202,203,204,205,208,209,210,211,212,213,214,215,216,217,222,223,
-    224,225,226,227,228,229,230,231,232,233,234,235,236,237,242,243,
-    244,245,246,247,248,249,250,251,252,253,254,255,256,257,262,263,
-    264,265,266,267,268,269,270,271,272,273,274,275,276,277,282,283,
-    284,285,286,287,288,289,290,291,292,293,294,295,296,297,302,303,
-    304,305,306,307,308,309,310,311,312,313,314,315,316,317,322,323,
-    324,325,326,327,328,329,330,331,332,333,334,335,336,337,1998,1999,
-    4002,4003,4004,4005,4006,4007,4008,4009,4010,4011,4012,4013,4014,4015,4016,4017,
-    4018,4019,4020,4021,4022,4023,4024,4025,4026,4027,4028,4029,4030,4031,4032,4033,
-    4034,4035,4036,4037,4038,4039,4040,4041,4042,4043,4044,4045,4046,4047,4048,4049,
-    4050,4051,4052,4053,4054,4055,4056,4057,4058,4059,4060,4061,4062,4063,4064,4065,
-    4066,4067,4068,4069,4070,4071,4072,4073,4074,4075,4076,4077,4078,4079,4080,4081,
-    4082,4083,4084,4085,4086,4087,4088,4089,4090,4091,4092,4093,4094,4095,4096,4097,
-    4098,4099,4100,4101,4102,4103,4104,4105,4106,4107,4108,4109,4110,4111,4112,4113
-*/
-
-//    LONG BASELINE CONFIGURATION *without* RFIpole
-
-      102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,
-      142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,
-      202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,
-      222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,
-      242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,
-      262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,
-      282,283,284,285,286,287,288,289,290,291,292,293,294,295,296,297,
-      302,303,304,305,306,307,308,309,310,311,312,313,314,315,316,317,
-      322,323,324,325,326,327,328,329,330,331,332,333,334,335,336,337,
-      4002,4003,4004,4005,4006,4007,4008,4009,4010,4011,4012,4013,4014,4015,4016,4017,
-      4018,4019,4020,4021,4022,4023,4024,4025,4026,4027,4028,4029,4030,4031,4032,4033,
-      4034,4035,4036,4037,4038,4039,4040,4041,4042,4043,4044,4045,4046,4047,4048,4049,
-      4050,4051,4052,4053,4054,4055,4056,4057,4058,4059,4060,4061,4062,4063,4064,4065,
-      4066,4067,4068,4069,4070,4071,4072,4073,4074,4075,4076,4077,4078,4079,4080,4081,
-      4082,4083,4084,4085,4086,4087,4088,4089,4090,4091,4092,4093,4094,4095,4096,4097,
-      4098,4099,4100,4101,4102,4103,4104,4105,4106,4107,4108,4109,4110,4111,4112,4113
-
-
-//      SHORT BASELINE CONFIGURATION
-/*
-      22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,
-      42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,
-      62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,
-      82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,
-      122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,
-      162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,
-      182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,
-      2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,
-      2018,2019,2020,2021,2022,2023,2024,2025,2026,2027,2028,2029,2030,2031,2032,2033,
-      2034,2035,2036,2037,2038,2039,2040,2041,2042,2043,2044,2045,2046,2047,2048,2049,
-      2050,2051,2052,2053,2054,2055,2056,2057,2058,2059,2060,2061,2062,2063,2064,2065,
-      2066,2067,2068,2069,2070,2071,2072,2073,2074,2075,2076,2077,2078,2079,2080,2081,
-      2082,2083,2084,2085,2086,2087,2088,2089,2090,2091,2092,2093,2094,2095,2096,2097,
-      2098,2099,2100,2101,2102,2103,2104,2105,2106,2107,2108,2109,2110,2111,2112,2113,
-      2114,2115,2116,2117,2118,2119,2120,2121,2122,2123,2124,2125,2126,2127,2128,2129,
-      2130,2131,2132,2133,2134,2135,2136,2137,2138,2139,2140,2141,2142,2143,2144,2145
-*/
-    };
-
-
 //---------------- Main loop to live in until shutdown -------------------
 
     printf("Makesub entering main loop\n");
@@ -1430,7 +1606,6 @@ void *makesub()
 //---------- if we don't have one ----------
 
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
-//WIP        mon->sub_write_sleeps++;                                   // record we went to sleep
         usleep(20000);                                                  // Chillax for a bit.
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
 
@@ -1454,47 +1629,22 @@ void *makesub()
 
         go4sub = TRUE;                                                                                                  // Say it all looks okay
 
-//        my_MandC_obs.GPSTIME = subm->subobs;                                                                          // Assume this subobs is the first of an observation
-//        my_MandC_obs.EXPOSURE = 8;
-//        strcpy( my_MandC_obs.MODE, "HW_LFILES" );
-//        my_MandC_obs.CHANNELS[100] = {0,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86};
-//        my_MandC_obs.FINECHAN_hz = 10000;
-//        my_MandC_obs.INTTIME_msec = 1000;
-//        my_MandC_obs.NINPUTS = 256;
-//        my_MandC_obs.UNIXTIME = ( my_MandC_obs.GPSTIME + GPS_offset );
-
         if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;                                                   // Don't allow more inputs than MAX_INPUTS
 
-//      ninputs_xgpu = ((subm->NINPUTS + 15) & 0xfff0);                                                                 // from when 'ninputs' needed to be rounded up to multiples of 16
         ninputs_xgpu = subm->NINPUTS;											// We don't pad .sub files any more so these two variables are the same
 
         transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_xgpu );                                    // Should be 5275648000 for 256T in 160+1 blocks
         desired_size = transfer_size + SUBFILE_HEADER_SIZE;                                                             // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
+        active_rf_inputs = 0;												// The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
-if (ninputs_xgpu < 256) {
         for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
           delay = 0;
-
-          if (loop < 48 ) {
-            my_MandC_meta[loop].rf_input = hc_rf_inputs[loop];                                                            // Hardcode for now
-          } else {
-            my_MandC_meta[loop].rf_input = hc_rf_inputs[loop+32];                                                            // Hardcode for now
-          }
-
+          my_MandC_meta[loop].rf_input = subm->rf_inp[loop].rf_input;
           my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( delay * 2  ) );                                       // NB: Each delay is a sample, ie two bytes, not one!!!
           my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
+          if ( my_MandC_meta[loop].seen_order != 0 ) active_rf_inputs++;						// seen_order starts at 1. If its 0 that means we didn't even get 1 udp packet for this rf_input
         }
-
-} else {
-        for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
-          delay = 0;
-          my_MandC_meta[loop].rf_input = hc_rf_inputs[loop];                                                            // Hardcode for now
-          my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( delay * 2  ) );                                       // NB: Each delay is a sample, ie two bytes, not one!!!
-          my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
-        }
-}
-
 
         if ( debug_mode ) {                                                                                             // If we're in debug mode
           sprintf( dest_file, "%s/%lld_%d_%d.free", conf.shared_mem_dir, subm->GPSTIME, subm->subobs, subm->COARSE_CHAN );      // Construct the full file name including path for a .free file
@@ -1558,8 +1708,6 @@ if (ninputs_xgpu < 256) {
               NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
               conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
-//        printf( "--------------------\n%s--------------------\n", sub_header );
-
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
 
         if ( go4sub ) {                                                                                 // If everything is okay so far, enter the next block of code
@@ -1576,6 +1724,7 @@ if (ninputs_xgpu < 256) {
 
           earliest_file = 0xFFFFFFFFFFFF;                                                               // Pick some ridiculous date in the future.  This is the date we need to beat.
           free_files = 0;                                                                               // So far, we haven't found any available free files we can reuse
+          bad_free_files = 0;										// nor any free files that we *can't* use (wrong size?)
 
           while ( (dp=readdir(dir)) != NULL) {                                                          // Read an entry and while there are still directory entries to look at
             if ( ( dp->d_type == DT_REG ) && ( dp->d_name[0] != '.' ) ) {                               // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
@@ -1585,7 +1734,7 @@ if (ninputs_xgpu < 256) {
                 if ( stat ( this_file, &filestats ) == 0 ) {                                            // Try to read the file statistics and if they are available
                   if ( filestats.st_size == desired_size ) {                                            // If the file is exactly the size we need
 
-//printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
+                    // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
 
                     free_files++;                                                                       // That's one more we can use!
 
@@ -1594,6 +1743,8 @@ if (ninputs_xgpu < 256) {
                       strcpy( best_file, this_file );                                                   // and we'll store its name
                       go4sub = TRUE;                                                                    // We've found at least one file we can reuse.  It may not be the best, but we know we can do this now.
                     }
+                  } else {
+                    bad_free_files++;                                                                       // That's one more we can use!
                   }
                 }
               }
@@ -1607,7 +1758,7 @@ if (ninputs_xgpu < 256) {
         if ( go4sub ) {                                                                                 // If everything is okay so far, enter the next block of code
           go4sub = FALSE;                                                                               // but go back to assuming a failure unless we succeed in the next bit
 
-//printf( "The winner is %s\n", best_file );
+          // printf( "The winner is %s\n", best_file );
 
           if ( rename( best_file, conf.temp_file_name ) != -1 ) {                                       // If we can rename the file to our temporary name
 
@@ -1718,8 +1869,8 @@ if (ninputs_xgpu < 256) {
 
         subm->state = sub_result;                                       // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-        printf("now=%lld,so=%d,ob=%lld,st=%d,free=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,dummy=%d,seen=%d\n",
-            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->state, free_files, subm->msec_wait, subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->udp_dummy, subm->rf_seen);
+        printf("now=%lld,so=%d,ob=%lld,st=%d,free=%d:%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
+            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
 
         fflush(stdout);
 
@@ -1981,7 +2132,7 @@ int main(int argc, char **argv)
     INT64 UDP_closelog = UDP_removed_from_buff - 20;                    // Go back 20 udp packets
 
     if ( debug_mode ) {                                                 // If we're in debug mode
-      UDP_closelog = UDP_removed_from_buff - 6000;                      // go back 6000!
+      UDP_closelog = UDP_removed_from_buff - 100;                      // go back 100!
     }
 
     if ( UDP_closelog < 0 ) UDP_closelog = 0;                           // In case we haven't really started yet
@@ -2021,118 +2172,3 @@ int main(int argc, char **argv)
 }
 
 // End of code.  Comments, snip and examples only follow
-/*
-HDR_SIZE 4096
-POPULATED 1
-OBS_ID 1229977336               *
-SUBOBS_ID 1229977360            * ****
-MODE HW_LFILES                  *
-UTC_START 2018-12-27-20:21:58   * ****
-OBS_OFFSET 24                   * ****
-NBIT 8
-NPOL 2
-NTIMESAMPLES 64000              *
-NINPUTS 512                     * must be 256 or 512
-NINPUTS_XGPU 512                * must be multiple of 16
-APPLY_PATH_WEIGHTS 0
-APPLY_PATH_DELAYS 0
-INT_TIME_MSEC 1000              *
-FSCRUNCH_FACTOR 50              *
-APPLY_VIS_WEIGHTS 0
-TRANSFER_SIZE 10551296000       *
-PROJ_ID C001                    *
-EXPOSURE_SECS 120               *
-COARSE_CHANNEL 105              *
-CORR_COARSE_CHANNEL 2           *
-SECS_PER_SUBOBS 8
-UNIXTIME 1545942118             *
-UNIXTIME_MSEC 0
-FINE_CHAN_WIDTH_HZ 10000        *
-NFINE_CHAN 128                  *
-BANDWIDTH_HZ 1280000            *
-SAMPLE_RATE 1280000             *
-MC_IP 0.0.0.0
-MC_PORT 0
-MC_SRC_IP 0.0.0.0
-*/
-/*
-Header listing for HDU #1:
-GPSTIME =           1279520688 / [s] GPS time of observation start
-EXPOSURE=                  600 / [s] duration of observation
-PROJECT = 'G0060   '           / Project ID
-MODE    = 'HW_LFILES'          / Observation mode
-CHANNELS= '57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128&'
-CONTINUE  ',129,130,131,132&'
-CONTINUE  '' / Coarse channels
-CHANSEL = '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23' / Indi
-FINECHAN=                   10 / [kHz] Fine channel width - correlator freq_res
-INTTIME =                  0.5 / [s] Individual integration time
-NINPUTS =                  256 / Number of inputs into the correlation products
-UNIXTIME=           1595485470 / [s] Unix timestamp of observation start
-*//*
-About to read: /vulcan/metafits/1283585640_metafits.fitsHeader listing for HDU #1:
-SIMPLE  =                    T / conforms to FITS standard
-BITPIX  =                    8 / array data type
-NAXIS   =                    0 / number of array dimensions
-EXTEND  =                    T
-GPSTIME =           1283585640 / [s] GPS time of observation start
-EXPOSURE=                  600 / [s] duration of observation
-FILENAME= 'morgan2020A_ips_NE_AzEl329.0,46.0_Ch[57,58,...,131,132]' / Name of ob
-MJD     =    59100.31506944444 / [days] MJD of observation
-DATE-OBS= '2020-09-08T07:33:42' / [UT] Date and time of observation
-LST     =     219.170438974719 / [deg] LST
-HA      = '-01:25:13.88'       / [hours] hour angle of pointing center
-AZIMUTH =              329.036 / [deg] Azimuth of pointing center
-ALTITUDE=              46.2671 / [deg] Altitude of pointing center
-RA      =    196.3551293452646 / [deg] RA of pointing center
-DEC     =    11.92982936865595 / [deg] Dec of pointing center
-RAPHASE =     197.458305961609 / [deg] RA of desired phase center
-DECPHASE=     12.1532286309174 / [deg] DEC of desired phase center
-ATTEN_DB=                  1.0 / [dB] global analogue attenuation, in dB
-SUN-DIST=     30.9244739683617 / [deg] Distance from pointing center to Sun
-MOONDIST=     136.719104001395 / [deg] Distance from pointing center to Moon
-JUP-DIST=    95.53026084751529 / [deg] Distance from pointing center to Jupiter
-GRIDNAME= 'sweet   '           / Pointing grid name
-GRIDNUM =                  108 / Pointing grid number
-CREATOR = 'jmorgan '           / Observation creator
-PROJECT = 'G0060   '           / Project ID
-MODE    = 'HW_LFILES'          / Observation mode
-RECVRS  = '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16' / Active receivers
-DELAYS  = '32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32' / Beamformer delays
-CALIBRAT=                    F / Intended for calibration
-CENTCHAN=                  121 / Center coarse channel
-CHANNELS= '57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128&'
-CONTINUE  ',129,130,131,132&'
-CONTINUE  '' / Coarse channels
-CHANSEL = '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23' / Indi
-SUN-ALT =     30.3414596672889 / [deg] Altitude of Sun
-FINECHAN=                   10 / [kHz] Fine channel width - correlator freq_res
-INTTIME =                  0.5 / [s] Individual integration time
-NAV_FREQ=                    1 / Assumed frequency averaging
-NSCANS  =                 1200 / Number of time instants in correlation products
-NINPUTS =                  256 / Number of inputs into the correlation products
-NCHANS  =                 3072 / Number of (averaged) fine channels in spectrum
-BANDWDTH=                30.72 / [MHz] Total bandwidth
-FREQCENT=               154.24 / [MHz] Center frequency of observation
-TIMEOFF =                    0 / [s] Deprecated, use QUACKTIM or GOODTIME
-DATESTRT= '2020-09-08T07:33:42' / [UT] Date and time of correlations start
-VERSION =                  2.0 / METAFITS version number
-TELESCOP= 'MWA     '
-INSTRUME= '128T    '
-QUACKTIM=                  3.0 / Seconds of bad data after observation starts
-GOODTIME=         1599550425.0 / OBSID+QUACKTIME as Unix timestamp
-DATE    = '2020-09-08T07:33:46' / UT Date of file creation
-UNIXTIME=           1599550422 / [s] Unix timestamp of observation start
-COMMENT After an observation starts, the receiver hardware changes take a
-COMMENT few seconds to stabilise. The 24 GPU boxes start saving data to
-COMMENT their output files anywhere from a second _before_ the start of
-COMMENT the observation to a few seconds after, and not necessarily at the
-COMMENT same time on each gpubox.
-COMMENT QUACKTIM and GOODTIME represent the start of the first uncontaminated
-COMMENT data, rounded up to the next time-averaged data packet. Note that this
-COMMENT time may be before the first actual data in some or all gpubox files.
-HISTORY Created by user mwa
-HISTORY Created on host vulcan.mwa128t.org
-HISTORY Command: "./config_daemon.py"
-END
-*/
