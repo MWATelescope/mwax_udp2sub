@@ -4,6 +4,12 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.03b-068    2021-10-25 BWC  Handle disappearance (and later restart) of edp packets better
+//				Change RECVMMSG_MODE back to MSG_WAITFORONE so VMA can work more efficiently
+//				Add logging of the number of free file available when about to write out a sub file
+//				Add version and build to PSRDADA header
+//				Yet to do: "Also grab RAWSCALE from metafits and stick it in as is into the PSRDADA header.  It’s a decimal value (float?)"
+//
 // 2.03a-067    2021-10-20 BWC  Modified default channels to be 1-26 (with a copy of CC10 on mwax25 because mwax10 is in Perth)
 //
 // 2.02z-066    2021-10-07 GJS  Modified default channels to be 1-12
@@ -168,8 +174,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 67
-#define THISVER "2.03a"
+#define BUILD 68
+#define THISVER "2.03b"
 
 #define _GNU_SOURCE
 
@@ -232,8 +238,8 @@
 #define SUBSECSPERSEC ( (SAMPLES_PER_SEC * 2LL)/ UDP_PAYLOAD_SIZE )
 #define SUBSECSPERSUB ( SUBSECSPERSEC * 8LL )
 
-#define RECVMMSG_MODE ( MSG_DONTWAIT )
-//#define RECVMMSG_MODE ( MSG_WAITFORONE )
+//#define RECVMMSG_MODE ( MSG_DONTWAIT )
+#define RECVMMSG_MODE ( MSG_WAITFORONE )
 
 //---------------- MWA external Structure definitions --------------------
 
@@ -444,7 +450,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
       ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
       ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",10,"239.255.90.10",59010}
+      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 5,"239.255.90.5" ,59005}
       ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",26,"239.255.90.26",59026}
 
 //      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
@@ -780,9 +786,13 @@ void *UDP_parse()
               start_window = end_window - 7;                            // then our new start window is the beginning second of the subobs for the packet we just saw.  (7 seconds because the second counts are inclusive).
             }
 
-            for ( loop = 0 ; loop < 4 ; loop++ ) {                                                      // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this will likely not be in time order of subobs
+            for ( loop = 0 ; loop < 4 ; loop++ ) {                                                      // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this may not be checked in time order of subobs
               if ( ( sub[ loop ].subobs < start_window ) && ( sub[ loop ].state == 1 ) ) {              // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
-                sub[ loop ].state = 2;                                                                  // set a state flag to tell another thread it's their problem from now on
+                if ( sub[ loop ].subobs == ( start_window - 8 ) ) {	// then if it's a very recent subobs (which is what we'd expect during normal operations)
+                  sub[ loop ].state = 2;                                // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
+                } else {						// or if it isn't recent then it's probably because the receivers (or medconv array) went away so...
+                  sub[ loop ].state = 6;				// set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                }
               }
             }
 
@@ -1260,6 +1270,7 @@ void *makesub()
     char this_file[300],best_file[300],dest_file[300];                  // The name of the file we're looking at, the name of the best file we've found so far, and the sub's final destination name
 
     time_t earliest_file;                                               // Holding space for the date we need to beat when looking for old .free files
+    int free_files = 0;							// Count of the number of ".free" files available to use for writing out .sub files
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
@@ -1509,11 +1520,12 @@ void *makesub()
           "MC_IP 0.0.0.0\n"
           "MC_PORT 0\n"
           "MC_SRC_IP 0.0.0.0\n"
+          "MWAX_U2S_VER " THISVER "-%d\n"
           ;
 
         sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
               NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
-              conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC );
+              conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
 //        printf( "--------------------\n%s--------------------\n", sub_header );
 
@@ -1532,6 +1544,7 @@ void *makesub()
           }
 
           earliest_file = 0xFFFFFFFFFFFF;                                                               // Pick some ridiculous date in the future.  This is the date we need to beat.
+          free_files = 0;										// So far, we haven't found any available free files we can reuse
 
           while ( (dp=readdir(dir)) != NULL) {                                                          // Read an entry and while there are still directory entries to look at
             if ( ( dp->d_type == DT_REG ) && ( dp->d_name[0] != '.' ) ) {                               // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
@@ -1542,6 +1555,8 @@ void *makesub()
                   if ( filestats.st_size == desired_size ) {                                            // If the file is exactly the size we need
 
 //printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
+
+                    free_files++;									// That's one more we can use!
 
                     if ( filestats.st_ctim.tv_sec < earliest_file ) {                                   // and this file has been there longer than the longest one we've found so far (ctime)
                       earliest_file = filestats.st_ctim.tv_sec;                                         // We have a new 'oldest' time to beat
@@ -1672,8 +1687,8 @@ void *makesub()
 
         subm->state = sub_result;                                       // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-        printf("now=%lld,so=%d,ob=%lld,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,dummy=%d,seen=%d\n",
-            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->state, subm->msec_wait, subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->udp_dummy, subm->rf_seen);
+        printf("now=%lld,so=%d,ob=%lld,st=%d,free=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,dummy=%d,seen=%d\n",
+            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->state, free_files, subm->msec_wait, subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->udp_dummy, subm->rf_seen);
 
         fflush(stdout);
 
@@ -1978,33 +1993,33 @@ int main(int argc, char **argv)
 /*
 HDR_SIZE 4096
 POPULATED 1
-OBS_ID 1229977336		*
-SUBOBS_ID 1229977360		* ****
-MODE HW_LFILES			*
-UTC_START 2018-12-27-20:21:58	* ****
-OBS_OFFSET 24			* ****
+OBS_ID 1229977336               *
+SUBOBS_ID 1229977360            * ****
+MODE HW_LFILES                  *
+UTC_START 2018-12-27-20:21:58   * ****
+OBS_OFFSET 24                   * ****
 NBIT 8
 NPOL 2
-NTIMESAMPLES 64000		*
-NINPUTS 512			* must be 256 or 512
-NINPUTS_XGPU 512		* must be multiple of 16
+NTIMESAMPLES 64000              *
+NINPUTS 512                     * must be 256 or 512
+NINPUTS_XGPU 512                * must be multiple of 16
 APPLY_PATH_WEIGHTS 0
 APPLY_PATH_DELAYS 0
-INT_TIME_MSEC 1000		*
-FSCRUNCH_FACTOR 50		*
+INT_TIME_MSEC 1000              *
+FSCRUNCH_FACTOR 50              *
 APPLY_VIS_WEIGHTS 0
-TRANSFER_SIZE 10551296000	*
-PROJ_ID C001			*
-EXPOSURE_SECS 120		*
-COARSE_CHANNEL 105		*
-CORR_COARSE_CHANNEL 2		*
+TRANSFER_SIZE 10551296000       *
+PROJ_ID C001                    *
+EXPOSURE_SECS 120               *
+COARSE_CHANNEL 105              *
+CORR_COARSE_CHANNEL 2           *
 SECS_PER_SUBOBS 8
-UNIXTIME 1545942118		*
+UNIXTIME 1545942118             *
 UNIXTIME_MSEC 0
-FINE_CHAN_WIDTH_HZ 10000	*
-NFINE_CHAN 128			*
-BANDWIDTH_HZ 1280000		*
-SAMPLE_RATE 1280000		*
+FINE_CHAN_WIDTH_HZ 10000        *
+NFINE_CHAN 128                  *
+BANDWIDTH_HZ 1280000            *
+SAMPLE_RATE 1280000             *
 MC_IP 0.0.0.0
 MC_PORT 0
 MC_SRC_IP 0.0.0.0
