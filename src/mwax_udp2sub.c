@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.02y-064    2021-10-05 BWC  Trap SIGTERM in addition to SIGINT for shutdown requests
+//
 // 2.02x-063    2021-10-05 BWC  Change default channels for mwax25 and mwax26
 //
 // 2.02w-062    2021-10-05 BWC  Fix minor bug with affinity being set differently on mwax15
@@ -160,8 +162,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 63
-#define THISVER "2.02x"
+#define BUILD 64
+#define THISVER "2.02y"
 
 #define _GNU_SOURCE
 
@@ -1684,7 +1686,16 @@ void *makesub()
 
 void sigint_handler(int signo)
 {
-  printf("\n\nAsked to shut down\n");
+  printf("\n\nAsked to shut down via SIGINT\n");
+  fflush(stdout);
+  terminate = TRUE;                             // This is a volatile, file scope variable.  All threads should be watching for this.
+}
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------
+
+void sigterm_handler(int signo)
+{
+  printf("\n\nAsked to shut down via SIGTERM\n");
   fflush(stdout);
   terminate = TRUE;                             // This is a volatile, file scope variable.  All threads should be watching for this.
 }
@@ -1789,6 +1800,7 @@ int main(int argc, char **argv)
 //---------------- Trap signals from outside the program ------------------------
 
     signal(SIGINT, sigint_handler);                     // Tell the OS that we want to trap SIGINT calls
+    signal(SIGTERM, sigterm_handler);                   // Tell the OS that we want to trap SIGTERM calls
     signal(SIGUSR1, sigusr1_handler);                   // Tell the OS that we want to trap SIGUSR1 calls
 
 //---------------- Allocate the RAM we need for the incoming udp buffer and initialise it ------------------------
