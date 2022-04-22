@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.04c-077    2022-04-05 BWC  Force NINPUT_XGPU to round up the rf inputs number to multiples of 32 inputs (16 dual pol antennas)
+//
 // 2.04b-076    2022-03-23 BWC  Add observing 'MODE' to log and 'udp buffers used'. Remove the udp individual counts
 //				Read ALTAZ table from metafits (3rd HDU) for delay calculations
 //
@@ -192,8 +194,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 76
-#define THISVER "2.04b"
+#define BUILD 77
+#define THISVER "2.04c"
 
 #define _GNU_SOURCE
 
@@ -1589,7 +1591,8 @@ void *makesub()
 
     int block;                                                          // loop variable
     int MandC_rf;                                                       // loop variable
-    int ninputs_xgpu;                                                   // The number of inputs the sub file must be padded out to
+    int ninputs_pad;							// The number of inputs in the sub file padded out with any needed dummy tiles (used to be a thing but isn't any more)
+    int ninputs_xgpu;                                                   // The number of inputs in the sub file but padded out to whatever number xgpu needs to deal with them in (not actually padded until done by Ian's code later)
 
     MandC_meta_t my_MandC_meta[MAX_INPUTS];                             // Working copies of the changeable metafits/metabin data for this subobs
     MandC_meta_t *my_MandC;                                             // Make a temporary pointer to the M&C metadata for one rf input
@@ -1666,14 +1669,15 @@ void *makesub()
 
         go4sub = TRUE;                                                                                                  // Say it all looks okay so far
 
-        ninputs_xgpu = subm->NINPUTS;                                                                                   // We don't pad .sub files any more so these two variables are the same
+        ninputs_pad = subm->NINPUTS;											// We don't pad .sub files any more so these two variables are the same
+        ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);                                                                 // Get this from 'ninputs' rounded up to multiples of 32
 
-        transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_xgpu );                                    // Should be 5275648000 for 256T in 160+1 blocks
+        transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_pad );                                     // Should be 5275648000 for 256T in 160+1 blocks
         desired_size = transfer_size + SUBFILE_HEADER_SIZE;                                                             // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
         active_rf_inputs = 0;                                                                                           // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
-        for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
+        for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {                                                                // populate the metadata array for all rf_inputs in this subobs incl padding ones
           my_MandC_meta[loop].rf_input = subm->rf_inp[loop].rf_input;
           my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( subm->rf_inp[loop].ws_delay * 2  ) );			// NB: Each delay is a sample, ie two bytes, not one!!!
           my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
@@ -1826,13 +1830,13 @@ void *makesub()
 
           dest = mempcpy( dest, sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
 
-          for ( MandC_rf = 0; MandC_rf < ninputs_xgpu; MandC_rf++ ) {           // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE
+          for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE
             dest = mempcpy( dest, blank_sub_line, SUB_LINE_SIZE );              // write them out one at a time
           }
 
           for ( block = 1; block <= BLOCKS_PER_SUB; block++ ) {                 // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
 
-            for ( MandC_rf = 0; MandC_rf < ninputs_xgpu; MandC_rf++ ) {         // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.  This is likely to be similar to the list we actually saw, but may not be identical!
+            for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {          // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.  This is likely to be similar to the list we actually saw, but may not be identical!
 
               my_MandC = &my_MandC_meta[MandC_rf];                              // Make a temporary pointer to the M&C metadata for this rf input.  NB these are sorted in order they need to be written out as opposed to the order the packets arrived.
 
@@ -1888,7 +1892,7 @@ void *makesub()
 /*
         if ( ( subm->udp_count == 1280512 ) && ( subm->udp_dummy == 1310720 ) ) {                                               //count=1280512,dummy=1310720 is a perfect storm.  No missing packets, but I couldn't find any packets at all.
           printf ( "my_MandC_meta array\n" );
-          for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {
+          for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {
             printf( "loop=%d,rf=%d,startb=%d,order=%d\n", loop, my_MandC_meta[loop].rf_input, my_MandC_meta[loop].start_byte, my_MandC_meta[loop].seen_order );
           }
 
