@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.02w-062    2021-10-05 BWC  Fix minor bug with affinity being set differently on mwax15
+//
 // 2.02v-061    2021-09-22 BWC  Add all genuine mwax servers (mwax01 to mwax26) into config
 //
 // 2.02u-060    2021-08-19 BWC  Add genuine mwax01 into config and move older servers to 192.168.90.19x addresses for the voltage network
@@ -156,8 +158,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 61
-#define THISVER "2.02v"
+#define BUILD 62
+#define THISVER "2.02w"
 
 #define _GNU_SOURCE
 
@@ -432,8 +434,8 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
       ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
       ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",25,"239.255.90.25",59025}
-      ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",26,"239.255.90.26",59026}
+      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 1,"239.255.90.1" ,59001}
+      ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226", 2,"239.255.90.2" ,59002}
 
 //      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
 //      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",9,"239.255.90.9",59009}
@@ -538,7 +540,7 @@ int set_cpu_affinity ( unsigned int mask )
     pthread_t my_thread;                        // I need to look up my own TID / LWP
     my_thread = pthread_self();                 // So what's my TID / LWP?
 
-    if (conf.udp2sub_id > 6 && conf.udp2sub_id < 16 ) {                                 // Only do mwax07 and mwax0a for now
+    if (conf.udp2sub_id > 26 ) {                                                         // Don't do any mwax servers for now
       return ( pthread_setaffinity_np( my_thread, sizeof(cpu_set_t), &my_cpu_set ));    // Make the call and return the result back to the caller
     } else {
       return ( -1 );
@@ -1953,3 +1955,118 @@ int main(int argc, char **argv)
 }
 
 // End of code.  Comments, snip and examples only follow
+/*
+HDR_SIZE 4096
+POPULATED 1
+OBS_ID 1229977336		*
+SUBOBS_ID 1229977360		* ****
+MODE HW_LFILES			*
+UTC_START 2018-12-27-20:21:58	* ****
+OBS_OFFSET 24			* ****
+NBIT 8
+NPOL 2
+NTIMESAMPLES 64000		*
+NINPUTS 512			* must be 256 or 512
+NINPUTS_XGPU 512		* must be multiple of 16
+APPLY_PATH_WEIGHTS 0
+APPLY_PATH_DELAYS 0
+INT_TIME_MSEC 1000		*
+FSCRUNCH_FACTOR 50		*
+APPLY_VIS_WEIGHTS 0
+TRANSFER_SIZE 10551296000	*
+PROJ_ID C001			*
+EXPOSURE_SECS 120		*
+COARSE_CHANNEL 105		*
+CORR_COARSE_CHANNEL 2		*
+SECS_PER_SUBOBS 8
+UNIXTIME 1545942118		*
+UNIXTIME_MSEC 0
+FINE_CHAN_WIDTH_HZ 10000	*
+NFINE_CHAN 128			*
+BANDWIDTH_HZ 1280000		*
+SAMPLE_RATE 1280000		*
+MC_IP 0.0.0.0
+MC_PORT 0
+MC_SRC_IP 0.0.0.0
+*/
+/*
+Header listing for HDU #1:
+GPSTIME =           1279520688 / [s] GPS time of observation start
+EXPOSURE=                  600 / [s] duration of observation
+PROJECT = 'G0060   '           / Project ID
+MODE    = 'HW_LFILES'          / Observation mode
+CHANNELS= '57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128&'
+CONTINUE  ',129,130,131,132&'
+CONTINUE  '' / Coarse channels
+CHANSEL = '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23' / Indi
+FINECHAN=                   10 / [kHz] Fine channel width - correlator freq_res
+INTTIME =                  0.5 / [s] Individual integration time
+NINPUTS =                  256 / Number of inputs into the correlation products
+UNIXTIME=           1595485470 / [s] Unix timestamp of observation start
+*//*
+About to read: /vulcan/metafits/1283585640_metafits.fitsHeader listing for HDU #1:
+SIMPLE  =                    T / conforms to FITS standard
+BITPIX  =                    8 / array data type
+NAXIS   =                    0 / number of array dimensions
+EXTEND  =                    T
+GPSTIME =           1283585640 / [s] GPS time of observation start
+EXPOSURE=                  600 / [s] duration of observation
+FILENAME= 'morgan2020A_ips_NE_AzEl329.0,46.0_Ch[57,58,...,131,132]' / Name of ob
+MJD     =    59100.31506944444 / [days] MJD of observation
+DATE-OBS= '2020-09-08T07:33:42' / [UT] Date and time of observation
+LST     =     219.170438974719 / [deg] LST
+HA      = '-01:25:13.88'       / [hours] hour angle of pointing center
+AZIMUTH =              329.036 / [deg] Azimuth of pointing center
+ALTITUDE=              46.2671 / [deg] Altitude of pointing center
+RA      =    196.3551293452646 / [deg] RA of pointing center
+DEC     =    11.92982936865595 / [deg] Dec of pointing center
+RAPHASE =     197.458305961609 / [deg] RA of desired phase center
+DECPHASE=     12.1532286309174 / [deg] DEC of desired phase center
+ATTEN_DB=                  1.0 / [dB] global analogue attenuation, in dB
+SUN-DIST=     30.9244739683617 / [deg] Distance from pointing center to Sun
+MOONDIST=     136.719104001395 / [deg] Distance from pointing center to Moon
+JUP-DIST=    95.53026084751529 / [deg] Distance from pointing center to Jupiter
+GRIDNAME= 'sweet   '           / Pointing grid name
+GRIDNUM =                  108 / Pointing grid number
+CREATOR = 'jmorgan '           / Observation creator
+PROJECT = 'G0060   '           / Project ID
+MODE    = 'HW_LFILES'          / Observation mode
+RECVRS  = '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16' / Active receivers
+DELAYS  = '32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32' / Beamformer delays
+CALIBRAT=                    F / Intended for calibration
+CENTCHAN=                  121 / Center coarse channel
+CHANNELS= '57,58,59,60,61,62,63,64,65,66,67,68,121,122,123,124,125,126,127,128&'
+CONTINUE  ',129,130,131,132&'
+CONTINUE  '' / Coarse channels
+CHANSEL = '0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23' / Indi
+SUN-ALT =     30.3414596672889 / [deg] Altitude of Sun
+FINECHAN=                   10 / [kHz] Fine channel width - correlator freq_res
+INTTIME =                  0.5 / [s] Individual integration time
+NAV_FREQ=                    1 / Assumed frequency averaging
+NSCANS  =                 1200 / Number of time instants in correlation products
+NINPUTS =                  256 / Number of inputs into the correlation products
+NCHANS  =                 3072 / Number of (averaged) fine channels in spectrum
+BANDWDTH=                30.72 / [MHz] Total bandwidth
+FREQCENT=               154.24 / [MHz] Center frequency of observation
+TIMEOFF =                    0 / [s] Deprecated, use QUACKTIM or GOODTIME
+DATESTRT= '2020-09-08T07:33:42' / [UT] Date and time of correlations start
+VERSION =                  2.0 / METAFITS version number
+TELESCOP= 'MWA     '
+INSTRUME= '128T    '
+QUACKTIM=                  3.0 / Seconds of bad data after observation starts
+GOODTIME=         1599550425.0 / OBSID+QUACKTIME as Unix timestamp
+DATE    = '2020-09-08T07:33:46' / UT Date of file creation
+UNIXTIME=           1599550422 / [s] Unix timestamp of observation start
+COMMENT After an observation starts, the receiver hardware changes take a
+COMMENT few seconds to stabilise. The 24 GPU boxes start saving data to
+COMMENT their output files anywhere from a second _before_ the start of
+COMMENT the observation to a few seconds after, and not necessarily at the
+COMMENT same time on each gpubox.
+COMMENT QUACKTIM and GOODTIME represent the start of the first uncontaminated
+COMMENT data, rounded up to the next time-averaged data packet. Note that this
+COMMENT time may be before the first actual data in some or all gpubox files.
+HISTORY Created by user mwa
+HISTORY Created on host vulcan.mwa128t.org
+HISTORY Command: "./config_daemon.py"
+END
+*/
