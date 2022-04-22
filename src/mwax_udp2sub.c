@@ -4,10 +4,13 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.04b-076    2022-03-23 BWC  Add observing 'MODE' to log and 'udp buffers used'. Remove the udp individual counts
+//				Read ALTAZ table from metafits (3rd HDU) for delay calculations
+//
 // 2.04a-075    2022-03-16 BWC  Improve reading of metafits files
-//				Add mwax101 back in for development support
-//				Count the number of free files of the wrong size and log it.  (More important now we run !=128T)
-//				Log the number of rf_inputs in each subobs and show 'wanted', 'saw', and 'common' (ie both seen and wanted)
+//                              Add mwax101 back in for development support
+//                              Count the number of free files of the wrong size and log it.  (More important now we run !=128T)
+//                              Log the number of rf_inputs in each subobs and show 'wanted', 'saw', and 'common' (ie both seen and wanted)
 //
 // 2.03h-074    2022-03-08 BWC  Change to 112T config (NB: 2.03g-073 was a minor config change GS made)
 //
@@ -189,8 +192,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 75
-#define THISVER "2.04a"
+#define BUILD 76
+#define THISVER "2.04b"
 
 #define _GNU_SOURCE
 
@@ -301,13 +304,22 @@ mon->sub_write_dummy++;                                         // record we nee
 
 //---------------- internal structure definitions --------------------
 
-typedef struct tile_meta {				// Structure format for the metadata associated with one rf input for one subobs
+typedef struct altaz_meta {				// Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
+
+    INT64 gpstime;
+    float Alt;
+    float Az;
+    float Dist_km;
+
+} altaz_meta_t;
+
+typedef struct tile_meta {                              // Structure format for the metadata associated with one rf input for one subobs
 
     int Input;
     int Antenna;
     int Tile;
-    char TileName[9];					// Leave room for a null on the end!
-    char Pol[2];					// Leave room for a null on the end!
+    char TileName[9];                                   // Leave room for a null on the end!
+    char Pol[2];                                        // Leave room for a null on the end!
     int Rx;
     int Slot;
     int Flag;
@@ -323,7 +335,8 @@ typedef struct tile_meta {				// Structure format for the metadata associated wi
     float Calib_Delay;
     float Calib_Gains[24];
 
-    uint16_t rf_input;					// What's the tile & pol identifier we'll see in the udp packets for this input?
+    uint16_t rf_input;                                  // What's the tile & pol identifier we'll see in the udp packets for this input?
+    int ws_delay;					// The whole sample delay IN SAMPLES (NOT BYTES). Can be -ve. Each extra delay will move the starting position earlier in the sample sequence
 
 } tile_meta_t;
 
@@ -368,7 +381,9 @@ typedef struct subobs_udp_meta {                        // Structure format for 
     uint16_t rf2ndx[65536];                             // A mapping from the rf_input value to what row in the pointer array its pointers are stored
     char *udp_volts[MAX_INPUTS+1][UDP_PER_RF_PER_SUB];    // array of pointers to every udp packet's payload that may be needed for this sub-observation.  NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
 
-    tile_meta_t rf_inp[MAX_INPUTS];			// Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file, NOT the order udp packets were seen in.
+    tile_meta_t rf_inp[MAX_INPUTS];                     // Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file, NOT the order udp packets were seen in.
+
+    altaz_meta_t altaz[3];				// The AltAz at the beginning, middle and end of the 8 second sub-observation
 
 } subobs_udp_meta_t;
 
@@ -1203,126 +1218,86 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
               printf ( "Failed to read NINPUTS\n" );
               fflush(stdout);
             }
+            if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;				// Don't allow more inputs than MAX_INPUTS (probably die reading the tile list anyway)
 
             fits_read_key( fptr, TLONGLONG, "UNIXTIME", &(subm->UNIXTIME), NULL, &status );
             if (status) {
               printf ( "Failed to read UNIXTIME\n" );
               fflush(stdout);
             }
-            
+
 
 //---------- We now have everything we need from the 1st HDU ----------
 
             int hdutype=0;
-//            long naxes[2];
-//            int nfound;
-//            int ncols;
             int colnum;
             int anynulls;
             long nrows;
+            long ntimes;
+
             long frow, felem;
 
+            int cfitsio_ints[MAX_INPUTS];                                       // Temp storage for integers read from the metafits file (in metafits order) before copying to final structure (in sub file order)
+            INT64 cfitsio_J[3];							// Temp storage for long "J" type integers read from the metafits file (used in pointing HDU)
+            float cfitsio_floats[MAX_INPUTS];                                   // Temp storage for floats read from the metafits file (in metafits order) before copying to final structure (in sub file order)
 
-            int cfitsio_ints[MAX_INPUTS];					// Temp storage for integers read from the metafits file (in metafits order) before copying to final structure (in sub file order)
-            float cfitsio_floats[MAX_INPUTS];					// Temp storage for floats read from the metafits file (in metafits order) before copying to final structure (in sub file order)
-
-            char cfitsio_strings[MAX_INPUTS][15];				// Temp storage for strings read from the metafits file (in metafits order) before copying to final structure (in sub file order)
-            char *cfitsio_str_ptr[MAX_INPUTS];					// We also need an array of pointers to the stings
+            char cfitsio_strings[MAX_INPUTS][15];                               // Temp storage for strings read from the metafits file (in metafits order) before copying to final structure (in sub file order)
+            char *cfitsio_str_ptr[MAX_INPUTS];                                  // We also need an array of pointers to the stings
             for (int loop = 0; loop < MAX_INPUTS; loop++) {
-              cfitsio_str_ptr[loop] = &cfitsio_strings[loop][0];		// That we need to fill with the addresses of the first character in each string in the list of inputs
+              cfitsio_str_ptr[loop] = &cfitsio_strings[loop][0];                // That we need to fill with the addresses of the first character in each string in the list of inputs
             }
 
-            int metafits2sub_order[MAX_INPUTS];					// index is the position in the metafits file starting at 0.  Value is the order in the sub file starting at 0.
+            int metafits2sub_order[MAX_INPUTS];                                 // index is the position in the metafits file starting at 0.  Value is the order in the sub file starting at 0.
 
             tile_meta_t *rfm;
 
-            fits_movrel_hdu( fptr, 1 , &hdutype, &status );				// Shift to the next HDU, where the antenna table is
+            fits_movrel_hdu( fptr, 1 , &hdutype, &status );                             // Shift to the next HDU, where the antenna table is
             if (status) {
               printf ( "Failed to move to 2nd HDU\n" );
               fflush(stdout);
             }
 
-/*
-            fits_read_keys_lng( fptr, "NAXIS", 1, 2, naxes, &nfound, &status);
-            if (status) {
-              printf ( "Failed to read NAXIS array\n" );
-              fflush(stdout);
-            }
-
-            printf ( "%d:%s,  naxes[0]=%ld,  naxes[1]=%ld\n", subobs_ready2write, metafits_file, naxes[0], naxes[1] );
-            if ( naxes[1] != subm->NINPUTS ) {
-              printf ( "NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, naxes[1] );
-            }
-*/
             fits_get_num_rows( fptr, &nrows, &status );
             if ( nrows != subm->NINPUTS ) {
               printf ( "NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, nrows );
             }
 
-//            fits_get_num_cols( fptr, &ncols, &status );
-
-/*
-        if (look) {
-          for (ii = 1; ii <= ncols; ii++) {
-            fits_make_keyn("TTYPE", ii, keyname, &status);
-            fits_read_key(mfptr, TSTRING, keyname, colname, NULL, &status);
-            fits_make_keyn("TFORM", ii, keyname, &status);
-            fits_read_key(mfptr, TSTRING, keyname, coltype, NULL, &status);
-            printf(" %3d %-16s %-16s\n", ii, colname, coltype);
-          }
-        }
-*/
-
         frow = 1;
         felem = 1;
 //        nullval = -99.;
 
-        //read Input key
-//        fits_get_colnum( fptr, CASEINSEN, "Input", &colnum, &status );
         fits_get_colnum( fptr, CASEINSEN, "Antenna", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-
-//        for (int loop = 0; loop < nrows; loop++) {
-//          printf( "%d,", cfitsio_ints[loop] );
-//        }
-//        printf( "\n" );
 
         fits_get_colnum( fptr, CASEINSEN, "Pol", &colnum, &status );
         fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
 
-//        for (int loop = 0; loop < nrows; loop++) {
-//          printf( "%s,", cfitsio_str_ptr[loop] );
-//        }
-//        printf( "\n" );
-
-
         for (int loop = 0; loop < nrows; loop++) {
-          metafits2sub_order[loop] = ( cfitsio_ints[loop] << 1 ) | ( ( *cfitsio_str_ptr[loop] == 'Y' ) ? 1 : 0 );			// Take the "Antenna" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That's how you know where in the sub file it goes.
+          metafits2sub_order[loop] = ( cfitsio_ints[loop] << 1 ) | ( ( *cfitsio_str_ptr[loop] == 'Y' ) ? 1 : 0 );                       // Take the "Antenna" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That's how you know where in the sub file it goes.
 //          printf( "%d,", metafits2sub_order[loop] );
         }
 //        printf( "\n" );
 
         // Now we know how to map the the order from the metafits file to the sub file (and internal structure), it's time to start reading in the fields one at a time
 
-
 //---------- write the 'Antenna' and 'Pol' fields -------- NB: These data are sitting in the temporary arrays already, so we don't need to reread them.
 
         for (int loop = 0; loop < nrows; loop++) {
-          subm->rf_inp[ metafits2sub_order[loop] ].Antenna = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-          strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Pol, cfitsio_str_ptr[loop] );	// Copy each string from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+          subm->rf_inp[ metafits2sub_order[loop] ].Antenna = cfitsio_ints[loop];                // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+          strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Pol, cfitsio_str_ptr[loop] );        // Copy each string from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
         }
 
 //---------- Read and write the 'Input' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Input", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Input = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Input = cfitsio_ints[loop];           // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Tile' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Tile", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Tile = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Tile = cfitsio_ints[loop];            // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'TileName' field --------
 
@@ -1334,19 +1309,19 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
         fits_get_colnum( fptr, CASEINSEN, "Rx", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Rx = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Rx = cfitsio_ints[loop];              // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Slot' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Slot", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Slot = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Slot = cfitsio_ints[loop];            // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Flag' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Flag", &colnum, &status );
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Flag = cfitsio_ints[loop];		// Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Flag = cfitsio_ints[loop];            // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Length' field --------
 
@@ -1358,19 +1333,19 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
         fits_get_colnum( fptr, CASEINSEN, "North", &colnum, &status );
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].North = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].North = cfitsio_floats[loop];         // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'East' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "East", &colnum, &status );
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].East = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].East = cfitsio_floats[loop];          // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Height' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Height", &colnum, &status );
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Height = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Height = cfitsio_floats[loop];                // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Gains' field --------
 
@@ -1384,7 +1359,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
         fits_get_colnum( fptr, CASEINSEN, "BFTemps", &colnum, &status );
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].BFTemps = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].BFTemps = cfitsio_floats[loop];               // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Delays' field --------
 
@@ -1395,11 +1370,11 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
         }
 
 //---------- Read and write the 'VCSOrder' field --------
-
+//
 //        fits_get_colnum( fptr, CASEINSEN, "VCSOrder", &colnum, &status );
 //        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-//        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].VCSOrder = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-
+//        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].VCSOrder = cfitsio_floats[loop];            // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+//
 //---------- Read and write the 'Flavors' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Flavors", &colnum, &status );
@@ -1410,7 +1385,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
         fits_get_colnum( fptr, CASEINSEN, "Calib_Delay", &colnum, &status );
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Calib_Delay = cfitsio_floats[loop];		// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Calib_Delay = cfitsio_floats[loop];           // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Calib_Gains' field --------
 
@@ -1424,7 +1399,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
         for (int loop = 0; loop < nrows; loop++) {
           rfm = &subm->rf_inp[ loop ];
-          rfm->rf_input = ( rfm->Tile << 1 ) | ( ( *rfm->Pol == 'Y' ) ? 1 : 0 );			// Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives the content of the 'rf_input' field in the udp packets for this row
+          rfm->rf_input = ( rfm->Tile << 1 ) | ( ( *rfm->Pol == 'Y' ) ? 1 : 0 );                        // Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives the content of the 'rf_input' field in the udp packets for this row
 
 /*
           printf( "%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%s,%f,%f,%f,%f,%s,%f:",
@@ -1467,6 +1442,79 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 */
         }
 
+//---------- We need to read in the AltAz information (ie the 3rd HDU) for the beginning, middle and end of this subobservation ----------
+
+            fits_movrel_hdu( fptr, 1 , &hdutype, &status );                             // Shift to the next HDU, where the AltAz table is
+            if (status) {
+              printf ( "Failed to move to 3rd HDU\n" );
+              fflush(stdout);
+            }
+
+            fits_get_num_rows( fptr, &ntimes, &status );				// How many rows (times) are written to the metafits?
+
+            // They *should* start at GPSTIME and have an entry every 4 seconds for EXPOSURE seconds, inclusive of the beginning and end.  ie 3 times for 8 seconds exposure @0sec, @4sec & @8sec
+            // So the number of them should be '(subm->EXPOSURE >> 2) + 1'
+            // The 3 we want for the beginning, middle and end of this subobs are '((subm->subobs - subm->GPSTIME)>>2)+1', '((subm->subobs - subm->GPSTIME)>>2)+2' & '((subm->subobs - subm->GPSTIME)>>2)+3'
+            // a lot of the time, we'll be past the end of the exposure time, so if we are, we'll need to fill the values in with something like a zenith pointing.
+
+
+            if ( (((subm->subobs - subm->GPSTIME)>>2)+3) > ntimes ) {									// if we want past the end of the list
+
+              for (int loop = 0; loop < 3; loop++) {											// then we need to put some default values in (ie between observations)
+                subm->altaz[ loop ].gpstime = ( subm->subobs + loop * 4 );								// populate the true gps times for the beginning, middle and end of this *sub*observation
+                subm->altaz[ loop ].Alt = 90.0;												// Point straight up (in degrees above horizon)
+                subm->altaz[ loop ].Az = 0.0;												// facing North (in compass degrees)
+                subm->altaz[ loop ].Dist_km = 0.0;											// No 'near field' supported between observations so just use 0.
+              }
+
+            } else {
+              // We know from the condition test above that we have 3 valid pointings available to read from the metafits 3rd HDU
+
+              frow = ((subm->subobs - subm->GPSTIME)>>2) + 1;										// We want to start at the first pointing for this *subobs* not the obs, so we need to step into the list
+
+              //---------- Read and write the 'gpstime' field --------
+
+              fits_get_colnum( fptr, CASEINSEN, "gpstime", &colnum, &status );
+              fits_read_col( fptr, TLONGLONG, colnum, frow, felem, 3, 0, cfitsio_J, &anynulls, &status );				// Read start, middle and end time values, beginning at *this* subobs in the observation
+              for (int loop = 0; loop < 3; loop++) subm->altaz[ loop ].gpstime = cfitsio_J[loop];					// Copy each 'J' integer from the array we got from the metafits (via cfitsio) into one element of the pointing array structure
+
+              //---------- Read and write the 'Alt' field --------
+
+              fits_get_colnum( fptr, CASEINSEN, "Alt", &colnum, &status );
+              fits_read_col( fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls, &status );				// Read start, middle and end time values, beginning at *this* subobs in the observation
+              for (int loop = 0; loop < 3; loop++) subm->altaz[ loop ].Alt = cfitsio_floats[loop];					// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+              //---------- Read and write the 'Az' field --------
+
+              fits_get_colnum( fptr, CASEINSEN, "Az", &colnum, &status );
+              fits_read_col( fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls, &status );				// Read start, middle and end time values, beginning at *this* subobs in the observation
+              for (int loop = 0; loop < 3; loop++) subm->altaz[ loop ].Az = cfitsio_floats[loop];					// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+              //---------- Read and write the 'Dist_km' field --------
+
+              fits_get_colnum( fptr, CASEINSEN, "Dist_km", &colnum, &status );
+              fits_read_col( fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls, &status );				// Read start, middle and end time values, beginning at *this* subobs in the observation
+              for (int loop = 0; loop < 3; loop++) subm->altaz[ loop ].Dist_km = cfitsio_floats[loop];					// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+            }
+
+
+
+
+/*
+printf ( "Exposure=%d, Calc=%d, Found=%ld, obs=%lld, subobs=%d, 1st=%lld\n", subm->EXPOSURE, (subm->EXPOSURE >> 2) + 1, ntimes, subm->GPSTIME, subm->subobs, ((subm->subobs - subm->GPSTIME)>>2)+1 );
+for (int loop = 0; loop < 3; loop++) {											// then we need to put some default values in (ie between observations)
+  printf ( "    time=%lld, Alt=%f, Az=%f, dist=%f\n", subm->altaz[loop].gpstime, subm->altaz[loop].Alt, subm->altaz[loop].Az, subm->altaz[loop].Dist_km );
+}
+
+altaz[0].gpstime
+altaz[0].Alt
+altaz[0].Az
+altaz[0].Dist_km
+*/
+
+
+
+
 
 //---------- We now have everything we need from the fits file ----------
 
@@ -1489,12 +1537,6 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
         }
       }
     }
-
-/*
-
-preinitialise all the start_bytes in the array to ( UDP_PAYLOAD_SIZE - ( whole sample delay for this rf_input ) * 2 )  NB: Each delay is a sample, ie two bytes, not one!!!
-
-*/
 
 }
 
@@ -1525,7 +1567,7 @@ void *makesub()
     int free_files = 0;                                                 // Count of the number of ".free" files available to use for writing out .sub files
     int bad_free_files = 0;                                             // Count of the number of ".free" files that *cannot* be used for some reason (probably the wrong size)
 
-    int active_rf_inputs;						// The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
+    int active_rf_inputs;                                               // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
@@ -1549,11 +1591,8 @@ void *makesub()
     int MandC_rf;                                                       // loop variable
     int ninputs_xgpu;                                                   // The number of inputs the sub file must be padded out to
 
-//    MandC_obs_t my_MandC_obs;                                         // Room for the observation metafits/metabin info
     MandC_meta_t my_MandC_meta[MAX_INPUTS];                             // Working copies of the changeable metafits/metabin data for this subobs
     MandC_meta_t *my_MandC;                                             // Make a temporary pointer to the M&C metadata for one rf input
-
-    int delay;                                                          // temp variable for delay calculations
 
     int source_packet;                                                  // which packet (of 5002) contains the first byte of data we need
     int source_offset;                                                  // what is the offset in that packet of the first byte we need
@@ -1623,27 +1662,22 @@ void *makesub()
 
         sub_result = 5;                                                 // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
-        go4sub = FALSE;                                                 // Start by assuming we failed.  We can set this TRUE if everything works out later
+//---------- Do some last-minute metafits work to prepare ----------
 
-//---------- Fake a metafits file ----------
+        go4sub = TRUE;                                                                                                  // Say it all looks okay so far
 
-        go4sub = TRUE;                                                                                                  // Say it all looks okay
-
-        if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;                                                   // Don't allow more inputs than MAX_INPUTS
-
-        ninputs_xgpu = subm->NINPUTS;											// We don't pad .sub files any more so these two variables are the same
+        ninputs_xgpu = subm->NINPUTS;                                                                                   // We don't pad .sub files any more so these two variables are the same
 
         transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_xgpu );                                    // Should be 5275648000 for 256T in 160+1 blocks
         desired_size = transfer_size + SUBFILE_HEADER_SIZE;                                                             // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
-        active_rf_inputs = 0;												// The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
+        active_rf_inputs = 0;                                                                                           // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
         for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
-          delay = 0;
           my_MandC_meta[loop].rf_input = subm->rf_inp[loop].rf_input;
-          my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( delay * 2  ) );                                       // NB: Each delay is a sample, ie two bytes, not one!!!
+          my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( subm->rf_inp[loop].ws_delay * 2  ) );			// NB: Each delay is a sample, ie two bytes, not one!!!
           my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
-          if ( my_MandC_meta[loop].seen_order != 0 ) active_rf_inputs++;						// seen_order starts at 1. If its 0 that means we didn't even get 1 udp packet for this rf_input
+          if ( my_MandC_meta[loop].seen_order != 0 ) active_rf_inputs++;                                                // seen_order starts at 1. If it's 0 that means we didn't even get 1 udp packet for this rf_input
         }
 
         if ( debug_mode ) {                                                                                             // If we're in debug mode
@@ -1724,7 +1758,7 @@ void *makesub()
 
           earliest_file = 0xFFFFFFFFFFFF;                                                               // Pick some ridiculous date in the future.  This is the date we need to beat.
           free_files = 0;                                                                               // So far, we haven't found any available free files we can reuse
-          bad_free_files = 0;										// nor any free files that we *can't* use (wrong size?)
+          bad_free_files = 0;                                                                           // nor any free files that we *can't* use (wrong size?)
 
           while ( (dp=readdir(dir)) != NULL) {                                                          // Read an entry and while there are still directory entries to look at
             if ( ( dp->d_type == DT_REG ) && ( dp->d_name[0] != '.' ) ) {                               // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
@@ -1869,8 +1903,8 @@ void *makesub()
 
         subm->state = sub_result;                                       // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-        printf("now=%lld,so=%d,ob=%lld,st=%d,free=%d:%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
-            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
+        printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
+            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
 
         fflush(stdout);
 
