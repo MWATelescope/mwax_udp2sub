@@ -4,9 +4,9 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
-// 2.03g-073    2022-02-28 GJS  Swap mwax19 out for mwax25.
+// 2.03h-074    2022-03-08 BWC  Change to 112T config (NB: 2.03g-073 was a minor config change GS made)
 //
-// 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration.
+// 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration
 //
 // 2.03e-071    2021-12-02 GJS  Update to swap mwax05 back into getting channel 5.
 //
@@ -184,8 +184,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 73
-#define THISVER "2.03g"
+#define BUILD 74
+#define THISVER "2.03h"
 
 #define _GNU_SOURCE
 
@@ -1396,6 +1396,7 @@ void *makesub()
 */
     };
 
+
 //---------------- Main loop to live in until shutdown -------------------
 
     printf("Makesub entering main loop\n");
@@ -1464,17 +1465,36 @@ void *makesub()
 
         if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;                                                   // Don't allow more inputs than MAX_INPUTS
 
-        ninputs_xgpu = ((subm->NINPUTS + 15) & 0xfff0);                                                                 // Get this from 'ninputs' rounded up to multiples of 16
+//      ninputs_xgpu = ((subm->NINPUTS + 15) & 0xfff0);                                                                 // from when 'ninputs' needed to be rounded up to multiples of 16
+        ninputs_xgpu = subm->NINPUTS;											// We don't pad .sub files any more so these two variables are the same
 
         transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_xgpu );                                    // Should be 5275648000 for 256T in 160+1 blocks
         desired_size = transfer_size + SUBFILE_HEADER_SIZE;                                                             // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
+
+if (ninputs_xgpu < 256) {
+        for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
+          delay = 0;
+
+          if (loop < 48 ) {
+            my_MandC_meta[loop].rf_input = hc_rf_inputs[loop];                                                            // Hardcode for now
+          } else {
+            my_MandC_meta[loop].rf_input = hc_rf_inputs[loop+32];                                                            // Hardcode for now
+          }
+
+          my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( delay * 2  ) );                                       // NB: Each delay is a sample, ie two bytes, not one!!!
+          my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
+        }
+
+} else {
         for ( loop = 0 ; loop < ninputs_xgpu ; loop++ ) {                                                               // populate the metadata array for all rf_inputs in this subobs incl padding ones
           delay = 0;
           my_MandC_meta[loop].rf_input = hc_rf_inputs[loop];                                                            // Hardcode for now
           my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE - ( delay * 2  ) );                                       // NB: Each delay is a sample, ie two bytes, not one!!!
           my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
         }
+}
+
 
         if ( debug_mode ) {                                                                                             // If we're in debug mode
           sprintf( dest_file, "%s/%lld_%d_%d.free", conf.shared_mem_dir, subm->GPSTIME, subm->subobs, subm->COARSE_CHAN );      // Construct the full file name including path for a .free file
