@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.03a-067    2021-10-20 BWC  Modified default channels to be 1-26 (with a copy of CC10 on mwax25 because mwax10 is in Perth)
+//
 // 2.02z-066    2021-10-07 GJS  Modified default channels to be 1-12
 //
 // 2.02y-065    2021-10-06 GJS  Modified default channels for mwax25 and 26
@@ -166,8 +168,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 66
-#define THISVER "2.02z"
+#define BUILD 67
+#define THISVER "2.03a"
 
 #define _GNU_SOURCE
 
@@ -432,18 +434,18 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{12,"mwax12",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.212",12,"239.255.90.12",59012}
       ,{13,"mwax13",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.213",13,"239.255.90.13",59013}
       ,{14,"mwax14",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.214",14,"239.255.90.14",59014}
-      ,{15,"mwax15",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.215", 1,"239.255.90.1" ,59001}
-      ,{16,"mwax16",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.216", 2,"239.255.90.2" ,59002}
-      ,{17,"mwax17",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.217", 3,"239.255.90.3" ,59003}
-      ,{18,"mwax18",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.218", 4,"239.255.90.4" ,59004}
-      ,{19,"mwax19",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.219", 5,"239.255.90.5" ,59005}
-      ,{20,"mwax20",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.220", 6,"239.255.90.6" ,59006}
-      ,{21,"mwax21",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.221", 7,"239.255.90.7" ,59007}
-      ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222", 8,"239.255.90.8" ,59008}
-      ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223", 9,"239.255.90.9" ,59009}
-      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",10,"239.255.90.10",59010}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",11,"239.255.90.11",59011}
-      ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",12,"239.255.90.12",59012}
+      ,{15,"mwax15",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.215",15,"239.255.90.15",59015}
+      ,{16,"mwax16",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.216",16,"239.255.90.16",59016}
+      ,{17,"mwax17",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.217",17,"239.255.90.17",59017}
+      ,{18,"mwax18",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.218",18,"239.255.90.18",59018}
+      ,{19,"mwax19",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.219",19,"239.255.90.19",59019}
+      ,{20,"mwax20",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.220",20,"239.255.90.20",59020}
+      ,{21,"mwax21",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.221",21,"239.255.90.21",59021}
+      ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
+      ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
+      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
+      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",10,"239.255.90.10",59010}
+      ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",26,"239.255.90.26",59026}
 
 //      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
 //      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",9,"239.255.90.9",59009}
