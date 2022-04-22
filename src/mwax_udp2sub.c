@@ -4,6 +4,8 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.03e-071    2021-12-02 GJS  Update to swap mwax05 back into getting channel 5.
+//
 // 2.03d-070    2021-11-09 GJS  Update to add breakthrough listen compute node to the channel mapping struct
 //
 // 2.03c-069    2021-10-26 BWC  Change mwax05 to CC25 (ie stop it from seeing data)
@@ -178,8 +180,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 70 
-#define THISVER "2.03d"
+#define BUILD 71 
+#define THISVER "2.03e"
 
 #define _GNU_SOURCE
 
@@ -434,7 +436,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{ 2,"mwax02",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.202", 2,"239.255.90.2" ,59002}
       ,{ 3,"mwax03",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.203", 3,"239.255.90.3" ,59003}
       ,{ 4,"mwax04",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.204", 4,"239.255.90.4" ,59004}
-      ,{ 5,"mwax05",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.205",25,"239.255.90.25",59025}
+      ,{ 5,"mwax05",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.205", 5,"239.255.90.5" ,59005}
       ,{ 6,"mwax06",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.206", 6,"239.255.90.6" ,59006}
       ,{ 7,"mwax07",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.207", 7,"239.255.90.7" ,59007}
       ,{ 8,"mwax08",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.208", 8,"239.255.90.8" ,59008}
