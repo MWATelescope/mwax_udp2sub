@@ -4,17 +4,19 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+// 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration
+//
 // 2.03e-071    2021-12-02 GJS  Update to swap mwax05 back into getting channel 5.
 //
 // 2.03d-070    2021-11-09 GJS  Update to add breakthrough listen compute node to the channel mapping struct
 //
 // 2.03c-069    2021-10-26 BWC  Change mwax05 to CC25 (ie stop it from seeing data)
-//				Yet to do: "Also grab RAWSCALE from metafits and stick it in as is into the PSRDADA header.  It’s a decimal value (float?)"
+//                              Yet to do: "Also grab RAWSCALE from metafits and stick it in as is into the PSRDADA header.  It’s a decimal value (float?)"
 //
 // 2.03b-068    2021-10-25 BWC  Handle disappearance (and later restart) of edp packets better
-//				Change RECVMMSG_MODE back to MSG_WAITFORONE so VMA can work more efficiently
-//				Add logging of the number of free file available when about to write out a sub file
-//				Add version and build to PSRDADA header
+//                              Change RECVMMSG_MODE back to MSG_WAITFORONE so VMA can work more efficiently
+//                              Add logging of the number of free file available when about to write out a sub file
+//                              Add version and build to PSRDADA header
 //
 // 2.03a-067    2021-10-20 BWC  Modified default channels to be 1-26 (with a copy of CC10 on mwax25 because mwax10 is in Perth)
 //
@@ -180,8 +182,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 71 
-#define THISVER "2.03e"
+#define BUILD 72
+#define THISVER "2.03f"
 
 #define _GNU_SOURCE
 
@@ -795,10 +797,10 @@ void *UDP_parse()
 
             for ( loop = 0 ; loop < 4 ; loop++ ) {                                                      // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this may not be checked in time order of subobs
               if ( ( sub[ loop ].subobs < start_window ) && ( sub[ loop ].state == 1 ) ) {              // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
-                if ( sub[ loop ].subobs == ( start_window - 8 ) ) {	// then if it's a very recent subobs (which is what we'd expect during normal operations)
+                if ( sub[ loop ].subobs == ( start_window - 8 ) ) {     // then if it's a very recent subobs (which is what we'd expect during normal operations)
                   sub[ loop ].state = 2;                                // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
-                } else {						// or if it isn't recent then it's probably because the receivers (or medconv array) went away so...
-                  sub[ loop ].state = 6;				// set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                } else {                                                // or if it isn't recent then it's probably because the receivers (or medconv array) went away so...
+                  sub[ loop ].state = 6;                                // set the state flag to indicate that this subobs should be abandoned as too old to be useful
                 }
               }
             }
@@ -1277,7 +1279,7 @@ void *makesub()
     char this_file[300],best_file[300],dest_file[300];                  // The name of the file we're looking at, the name of the best file we've found so far, and the sub's final destination name
 
     time_t earliest_file;                                               // Holding space for the date we need to beat when looking for old .free files
-    int free_files = 0;							// Count of the number of ".free" files available to use for writing out .sub files
+    int free_files = 0;                                                 // Count of the number of ".free" files available to use for writing out .sub files
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
@@ -1349,7 +1351,7 @@ void *makesub()
     4066,4067,4068,4069,4070,4071,4072,4073,4074,4075,4076,4077,4078,4079,4080,4081,
     4082,4083,4084,4085,4086,4087,4088,4089,4090,4091,4092,4093,4094,4095,4096,4097,
     4098,4099,4100,4101,4102,4103,4104,4105,4106,4107,4108,4109,4110,4111,4112,4113
-
+*/
 
 //    LONG BASELINE CONFIGURATION *without* RFIpole
 
@@ -1370,9 +1372,9 @@ void *makesub()
       4082,4083,4084,4085,4086,4087,4088,4089,4090,4091,4092,4093,4094,4095,4096,4097,
       4098,4099,4100,4101,4102,4103,4104,4105,4106,4107,4108,4109,4110,4111,4112,4113
 
-*/
-//      SHORT BASELINE CONFIGURATION
 
+//      SHORT BASELINE CONFIGURATION
+/*
       22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,
       42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,
       62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,
@@ -1389,7 +1391,7 @@ void *makesub()
       2098,2099,2100,2101,2102,2103,2104,2105,2106,2107,2108,2109,2110,2111,2112,2113,
       2114,2115,2116,2117,2118,2119,2120,2121,2122,2123,2124,2125,2126,2127,2128,2129,
       2130,2131,2132,2133,2134,2135,2136,2137,2138,2139,2140,2141,2142,2143,2144,2145
-
+*/
     };
 
 //---------------- Main loop to live in until shutdown -------------------
@@ -1551,7 +1553,7 @@ void *makesub()
           }
 
           earliest_file = 0xFFFFFFFFFFFF;                                                               // Pick some ridiculous date in the future.  This is the date we need to beat.
-          free_files = 0;										// So far, we haven't found any available free files we can reuse
+          free_files = 0;                                                                               // So far, we haven't found any available free files we can reuse
 
           while ( (dp=readdir(dir)) != NULL) {                                                          // Read an entry and while there are still directory entries to look at
             if ( ( dp->d_type == DT_REG ) && ( dp->d_name[0] != '.' ) ) {                               // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
@@ -1563,7 +1565,7 @@ void *makesub()
 
 //printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
 
-                    free_files++;									// That's one more we can use!
+                    free_files++;                                                                       // That's one more we can use!
 
                     if ( filestats.st_ctim.tv_sec < earliest_file ) {                                   // and this file has been there longer than the longest one we've found so far (ctime)
                       earliest_file = filestats.st_ctim.tv_sec;                                         // We have a new 'oldest' time to beat
