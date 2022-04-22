@@ -4,7 +4,9 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
-// 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration
+// 2.03g-073    2022-02-28 GJS  Swap mwax19 out for mwax25.
+//
+// 2.03f-072    2022-01-19 BWC  Change to Long Baseline configuration.
 //
 // 2.03e-071    2021-12-02 GJS  Update to swap mwax05 back into getting channel 5.
 //
@@ -182,8 +184,8 @@
 //
 // To do:               Too much to say!
 
-#define BUILD 72
-#define THISVER "2.03f"
+#define BUILD 73
+#define THISVER "2.03g"
 
 #define _GNU_SOURCE
 
@@ -458,7 +460,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
       ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
       ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 5,"239.255.90.5" ,59005}
+      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",19,"239.255.90.19",59019}
       ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",12,"239.255.90.12",59012}
       ,{27,"blc00" ,0,3500000,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.240",12,"239.255.90.12",59012}
 
