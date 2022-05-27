@@ -276,6 +276,10 @@
 //#define RECVMMSG_MODE ( MSG_DONTWAIT )
 #define RECVMMSG_MODE ( MSG_WAITFORONE )
 
+#define MONITOR_IP "224.0.2.2"
+#define MONITOR_PORT 8007
+#define MONITOR_TTL 3
+
 //---------------- MWA external Structure definitions --------------------
 
 #pragma pack(push,1)                          // We're writing this header into all our packets, so we want/need to force the compiler not to add it's own idea of structure padding
@@ -295,8 +299,6 @@ typedef struct mwa_udp_packet {               // Structure format for the MWA da
 
 } mwa_udp_packet_t ;
 
-//----------------
-/* WIP
 typedef struct udp2sub_monitor {               // Structure for the placing monitorable statistics in shared memory so they can be read by external applications
 
     uint8_t udp2sub_id;                       // Which instance number we are.  Probably from 01 to 26, at least initially.
@@ -308,19 +310,17 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     // Stats on lost packets
     uint64_t sub_write_sleeps;                  // record how often we went to sleep while looking for a sub file to write out (should grow quickly)
 
-mon->ignored_for_a_bad_type++;                          // Keep track for debugging of how many packets we've seen that we can't handle
-mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
-mon->sub_meta_sleeps++;                                         // record we went to sleep
-mon->sub_write_sleeps++;                                        // record we went to sleep
-mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
-
-
+// mon->ignored_for_a_bad_type++;                          // Keep track for debugging of how many packets we've seen that we can't handle
+// mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
+// mon->sub_meta_sleeps++;                                         // record we went to sleep
+// mon->sub_write_sleeps++;                                        // record we went to sleep
+// mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 } udp2sub_monitor_t ;
-*/
+
 #pragma pack(pop)                               // Set the structure packing back to 'normal' whatever that is
 
 //---------------- internal structure definitions --------------------
-
+4
 typedef struct altaz_meta {				// Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
 
     INT64 gpstime;
@@ -455,6 +455,7 @@ UINT32 GPS_offset = 315964782;                          // Logging only.  Needs 
 struct mmsghdr *msgvecs;
 struct iovec *iovecs;
 mwa_udp_packet_t *UDPbuf;
+udp2sub_monitor_t monitor;
 
 subobs_udp_meta_t *sub;                                 // Pointer to the four subobs metadata arrays
 char *blank_sub_line;                                   // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
@@ -618,6 +619,9 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       config->UDPport = 59000 + coarse_chan;                    // Multicast port address is the forced coarse channel number plus an offset of 59000
     }
 
+    monitor.coarse_chan = coarse_chan;
+    monitor.hostname = config.hostname;
+    monitor.udp2sub_id = config.udp2sub_id;
 }
 
 //===================================================================================================================================================
@@ -813,6 +817,8 @@ void *UDP_parse()
 
     while (!terminate) {
 
+
+
       if ( UDP_removed_from_buff < UDP_added_to_buff ) {                // If there is at least one packet waiting to be processed
 
         my_udp = &UDPbuf[ UDP_removed_from_buff % UDP_num_slots ];      // then this is a pointer to it.
@@ -823,6 +829,8 @@ void *UDP_parse()
 
           my_udp->subsec_time = ntohs( my_udp->subsec_time );           // Convert subsec_time to a usable uint16_t which at this stage is still within a single second
           my_udp->GPS_time = ntohl( my_udp->GPS_time );                 // Convert GPS_time (bottom 32 bits only) to a usable uint32_t
+
+
 
           my_udp->rf_input = ntohs( my_udp->rf_input );                 // Convert rf_input to a usable uint16_t
           my_udp->edt2udp_token = ntohs( my_udp->edt2udp_token );       // Convert edt2udp_token to a usable uint16_t
@@ -1798,7 +1806,9 @@ void *makesub()
 
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
     tile_meta_t *rfm;							// Pointer to the tile metadata for the tile I'm working on
+  
 
+    
     int block;                                                          // loop variable
     int MandC_rf;                                                       // loop variable
     int ninputs_pad;							// The number of inputs in the sub file padded out with any needed dummy tiles (used to be a thing but isn't any more)
@@ -1862,6 +1872,7 @@ void *makesub()
 //---------- if we don't have one ----------
 
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
+        monitor.sub_write_sleeps++;
         usleep(20000);                                                  // Chillax for a bit.
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
 
@@ -2168,6 +2179,61 @@ void *makesub()
 
     printf( "Exiting makesub\n" );
 
+    pthread_exit(NULL);
+}
+
+void heartbeat()
+{
+    unsigned char ttl = MONITOR_TTL;
+    struct sockaddr_in addr;
+    struct in_addr localInterface;
+
+    int monitor_socket;
+
+    // create what looks like an ordinary UDP socket
+    if ( ( monitor_socket = socket( AF_INET, SOCK_DGRAM, 0) ) < 0) {
+      perror("socket");
+      terminate = TRUE;
+      pthread_exit(NULL);
+    }
+
+    // set up destination address
+    memset( &addr, 0, sizeof(addr) );
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr( MONITOR_IP );
+    addr.sin_port = htons( MONITOR_PORT );
+
+    setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl) );
+
+    char loopch = 0;
+
+    if (setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_LOOP, (char *) &loopch, sizeof(loopch) ) < 0) {
+      perror("setting IP_MULTICAST_LOOP:");
+      close( health_socket );
+      terminate = TRUE;
+      pthread_exit(NULL);
+    }
+
+    // Set local interface for outbound multicast datagrams. The IP address specified must be associated with a local, multicast-capable interface.
+    localInterface.s_addr = inet_addr( conf.local_if );
+
+    if (setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_IF, (char *) &localInterface, sizeof(localInterface) ) < 0) {
+      perror("setting local interface");
+      close( health_socket );
+      terminate = TRUE;
+      pthread_exit(NULL);
+    }
+
+    while(!terminate) {
+      if (sendto( monitor_socket, &monitor, sizeof(monitor), 0, (struct sockaddr *) &addr, sizeof(addr) ) < 0) {
+        printf( "\nFailed to send monitor packet" );
+        fflush(stdout);
+      }
+      monitor.sub_write_sleeps = 0;
+      usleep(1000000);
+    }
+
+    printf("\nStopping heartbeat");
     pthread_exit(NULL);
 }
 
