@@ -4,6 +4,13 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
+#define BUILD 80
+#define THISVER "2.04f"
+//
+// 2.04f-080    2022-05-05 BWC  Delay tracking of sources now implemented. Merged channel mapping from GJS patch of build 79
+//
+// 2.04e-079    2022-05-02 GJS  Minor change of MWAX-to-channel mapping (mwax25 -> Ch02).  Also non-released fork of 'Implement more cable delays from metafits'
+//
 // 2.04d-078    2022-04-05 BWC  Implement cable delays "CABLEDEL" from metafits and write out fractional delay table to subfile
 //
 // 2.04c-077    2022-04-05 BWC  Force NINPUT_XGPU to round up the rf inputs number to multiples of 32 inputs (16 dual pol antennas)
@@ -181,8 +188,8 @@
 //
 //===================================================================================================================================================
 //
-// To compile:  gcc mwax_udp2sub_46.c -omwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
-//      or      gcc mwax_udp2sub_57.c -o../mwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
+// To compile:  gcc mwax_udp2sub_xx.c -omwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
+//      or      gcc mwax_udp2sub_xx.c -o../mwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
 //              There should be NO warnings or errors on compile!
 //
 // To run:      numactl --cpunodebind=1 --membind=1 dd bs=4096 count=1288001 if=/dev/zero of=/dev/shm/mwax/a.free
@@ -195,9 +202,6 @@
 //===================================================================================================================================================
 //
 // To do:               Too much to say!
-
-#define BUILD 78
-#define THISVER "2.04d"
 
 #define _GNU_SOURCE
 
@@ -257,10 +261,12 @@
 #define BLOCKS_PER_SUB (160LL)
 #define FFT_PER_BLOCK (10LL)
 
-#define POINTINGS_PER_SUB (BLOCKS_PER_SUB * FFT_PER_BLOCK + 1LL)
-// NB: POINTINGS_PER_SUB gives 1601 so that every 5ms we write a new delay to the sub file (inclusive of end points).
-// They might be 6400 samples each for critically sampled data or 8192 for 32/25 oversampled data. Ether way, the 5ms is constant while Ultrafine_bw is 200Hz
+#define POINTINGS_PER_SUB (BLOCKS_PER_SUB * FFT_PER_BLOCK)
+// NB: POINTINGS_PER_SUB gives 1600 so that every 5ms we write a new delay to the sub file.
+
 #define SUB_LINE_SIZE ((SAMPLES_PER_SEC * 8LL * 2LL) / BLOCKS_PER_SUB)
+// They might be 6400 samples each for critically sampled data or 8192 for 32/25 oversampled data. Ether way, the 5ms is constant while Ultrafine_bw is 200Hz
+
 #define NTIMESAMPLES ((SAMPLES_PER_SEC * 8LL) / BLOCKS_PER_SUB)
 
 #define UDP_PER_RF_PER_SUB ( ((SAMPLES_PER_SEC * 8LL * 2LL) / UDP_PAYLOAD_SIZE) + 2 )
@@ -321,6 +327,10 @@ typedef struct altaz_meta {				// Structure format for the metadata associated w
     float Alt;
     float Az;
     float Dist_km;
+
+    long double SinAzCosAlt;				// will be multiplied by tile East
+    long double CosAzCosAlt;				// will be multiplied by tile North
+    long double SinAlt;					// will be multiplied by tile Height
 
 } altaz_meta_t;
 
@@ -524,7 +534,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
       ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
       ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",19,"239.255.90.19",59019}
+      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 2,"239.255.90.2" ,59002}
       ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",12,"239.255.90.12",59012}
       ,{27,"blc00" ,0,3500000,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.240",12,"239.255.90.12",59012}
 
@@ -984,7 +994,20 @@ void add_meta_fits()
     struct timespec started_meta_write_time;
     struct timespec ended_meta_write_time;
 
-    static long double m2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of metres to samples.
+    static long double mm2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of millimetres to samples.
+
+    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) * (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) ) ); // Frequently used during fitting parabola
+//    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
+    static long double one_over_num_blocks = ( ((long double) 1L) / (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) );      // Frequently used during fitting parabola
+
+    static long double conv2int32 = (long double)( 1 << 20 ) * (long double) 1000L;                     // Frequently used conversion factor to millisamples and making use of extra bits in int32
+    static long double res_max = (long double) 2L;                                                      // Frequently used in range checking. Largest allowed residual.
+    static long double res_min = (long double) -2L;                                                     // Frequently used in range checking. Smallest allowed residual.
+
+    long double d2r = M_PIl / 180.0L;					// Calculate a long double conversion factor from degrees to radians (we'll use it a few times)
+    long double SinAlt, CosAlt, SinAz, CosAz;				// temporary variables for storing the trig results we need to do delay tracking
+
+    long double a,b,c;							// coefficients of the delay fitting parabola
 
     fitsfile *fptr;                                                                             // FITS file pointer, defined in fitsio.h
 //    char card[FLEN_CARD];                                                                     // Standard string lengths defined in fitsio.h
@@ -1140,12 +1163,18 @@ void add_meta_fits()
 //---------- Pull out delay handling settings ----------
 
             fits_read_key( fptr, TINT, "CABLEDEL", &(subm->CABLEDEL), NULL, &status );                  // Read the CABLEDEL field. 0=Don't apply. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+
+if (debug_mode) subm->CABLEDEL = 1;
+
             if (status) {
               printf ( "Failed to read CABLEDEL\n" );
               fflush(stdout);
             }
 
             fits_read_key( fptr, TINT, "GEODEL", &(subm->GEODEL), NULL, &status );			// Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+
+if (debug_mode) subm->GEODEL = 3;
+
             if (status) {
               printf ( "Failed to read GEODEL\n" );
               fflush(stdout);
@@ -1282,7 +1311,6 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
               printf ( "Failed to read UNIXTIME\n" );
               fflush(stdout);
             }
-
 
 //---------- We now have everything we need from the 1st HDU ----------
 
@@ -1468,13 +1496,18 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
             // The 3 we want for the beginning, middle and end of this subobs are '((subm->subobs - subm->GPSTIME)>>2)+1', '((subm->subobs - subm->GPSTIME)>>2)+2' & '((subm->subobs - subm->GPSTIME)>>2)+3'
             // a lot of the time, we'll be past the end of the exposure time, so if we are, we'll need to fill the values in with something like a zenith pointing.
 
-            if ( (((subm->subobs - subm->GPSTIME)>>2)+3) > ntimes ) {									// if we want past the end of the list
+            if ( ( subm->GEODEL == 1 ) ||												// If we have been specifically asked for zenith pointings *or*
+              ( (((subm->subobs - subm->GPSTIME) >>2)+3) > ntimes ) ) {									// if we want times which are past the end of the list available in the metafits
 
               for (int loop = 0; loop < 3; loop++) {											// then we need to put some default values in (ie between observations)
                 subm->altaz[ loop ].gpstime = ( subm->subobs + loop * 4 );								// populate the true gps times for the beginning, middle and end of this *sub*observation
                 subm->altaz[ loop ].Alt = 90.0;												// Point straight up (in degrees above horizon)
                 subm->altaz[ loop ].Az = 0.0;												// facing North (in compass degrees)
                 subm->altaz[ loop ].Dist_km = 0.0;											// No 'near field' supported between observations so just use 0.
+
+                subm->altaz[ loop ].SinAzCosAlt = 0L;											// will be multiplied by tile East
+                subm->altaz[ loop ].CosAzCosAlt = 0L;											// will be multiplied by tile North
+                subm->altaz[ loop ].SinAlt = 1L;											// will be multiplied by tile Height
               }
 
             } else {
@@ -1505,6 +1538,18 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
               fits_get_colnum( fptr, CASEINSEN, "Dist_km", &colnum, &status );
               fits_read_col( fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls, &status );				// Read start, middle and end time values, beginning at *this* subobs in the observation
               for (int loop = 0; loop < 3; loop++) subm->altaz[ loop ].Dist_km = cfitsio_floats[loop];					// Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+
+              //---------- Now calculate the East/North/Height conversion factors for the three times --------
+
+              for (int loop = 0; loop < 3; loop++) {
+                sincosl( d2r * (long double) subm->altaz[ loop ].Alt, &SinAlt, &CosAlt );						// Calculate the Sin and Cos of Alt in one operation.
+                sincosl( d2r * (long double) subm->altaz[ loop ].Az,  &SinAz,  &CosAz  );						// Calculate the Sin and Cos of Az in one operation.
+
+                subm->altaz[ loop ].SinAzCosAlt = SinAz * CosAlt;									// this conversion factor will be multiplied by tile East
+                subm->altaz[ loop ].CosAzCosAlt = CosAz * CosAlt;									// this conversion factor will be multiplied by tile North
+                subm->altaz[ loop ].SinAlt = SinAlt;											// this conversion factor will be multiplied by tile Height
+              }
+
             }
 
 /*
@@ -1517,8 +1562,6 @@ altaz[0].gpstime
 altaz[0].Alt
 altaz[0].Az
 altaz[0].Dist_km
-//          work out all the pointing delays here but don't apply them yet to tiles
-
 */
 
 //---------- We now have everything we need from the fits file ----------
@@ -1535,27 +1578,114 @@ altaz[0].Dist_km
 //---------- Let's take all that metafits info, do some maths and other processing and get it ready to use, for when we need to actually write out the sub file
 
         tile_meta_t *rfm;
-        long double delay_so_far_m;									// Delay to apply IN METRES calculated so far.
+        long double delay_so_far_start_mm;									// Delay to apply IN MILLIMETRES calculated so far at start of 8 sec subobservation
+        long double delay_so_far_middle_mm;									// Delay to apply IN MILLIMETRES calculated so far at middle of 8 sec subobservation
+        long double delay_so_far_end_mm;									// Delay to apply IN MILLIMETRES calculated so far at end of 8 sec subobservation
 
         for (int loop = 0; loop < subm->NINPUTS; loop++) {
-          rfm = &subm->rf_inp[ loop ];
-          rfm->rf_input = ( rfm->Tile << 1 ) | ( ( *rfm->Pol == 'Y' ) ? 1 : 0 );                        // Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives the content of the 'rf_input' field in the udp packets for this row
+          rfm = &subm->rf_inp[ loop ];										// Make a temporary pointer to this rf input, if only for readability of the source
+          rfm->rf_input = ( rfm->Tile << 1 ) | ( ( *rfm->Pol == 'Y' ) ? 1 : 0 );                        	// Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives the content of the 'rf_input' field in the udp packets for this row
 
-          delay_so_far_m = 0L;										// Just starting for this tiles.  No known delays (yet)
+          delay_so_far_start_mm = 0L;										// No known delays (yet) for the start of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
+          delay_so_far_middle_mm = 0L;										// No known delays (yet) for the middle of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
+          delay_so_far_end_mm = 0L;										// No known delays (yet) for the end of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
 
-          if ( debug_mode || ( subm->CABLEDEL >= 1 ) ){							// CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-            delay_so_far_m += rfm->Length_f;								// So add in the cable delays WIP!!! or is it subtract them?
+//---------- Do cable delays ----------
+
+          if ( subm->CABLEDEL >= 1 ){										// CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+            delay_so_far_start_mm += rfm->Length_f;								// So add in the cable delays WIP!!! or is it subtract them?
+            delay_so_far_middle_mm += rfm->Length_f;								// Cable delays apply equally at the start, middle and end of the subobservation
+            delay_so_far_end_mm += rfm->Length_f;								// so add them equally to all three delays for start, middle and end
           }
 
-//---------- Temp code to just do cable delays ----------
-          rfm->ws_delay = (int16_t) roundl( delay_so_far_m * m2s_conv_factor );
-          rfm->initial_delay = (( delay_so_far_m * m2s_conv_factor ) - roundl( delay_so_far_m * m2s_conv_factor )) * 1000 * (1<<20) ;	// Horrible line of code that needs to be replaced to save unneeded maths! WIP!!!
-          rfm->delta_delay = 0;
-          rfm->delta_delta_delay = 0;
-//---------- End of temp code to just do cable delays ----------
+//          if ( subm->CABLEDEL >= 2 ){										// CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+//	    what's the value in mm of the beamformer delays
+//            delay_so_far_start_mm += bf_delay;
+//            delay_so_far_middle_mm += bf_delay;								// Cable delays apply equally at the start, middle and end of the subobservation
+//            delay_so_far_end_mm += bf_delay;									// so add them equally to all three delays for start, middle and end
+//          }
+
+//---------- Do Geometric delays ----------
+
+          if ( subm->GEODEL >= 1 ){										// GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+
+            delay_so_far_start_mm +=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+                                        ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+                                        ( rfm->Height * subm->altaz[ 0 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+
+            delay_so_far_middle_mm += ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+                                        ( rfm->East * subm->altaz[ 1 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+                                        ( rfm->Height * subm->altaz[ 1 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+
+            delay_so_far_end_mm +=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+                                        ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+                                        ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+          }
+
+//---------- Do Calibration delays ----------
+//	WIP.  Calibration delays are just a dream right now
+
+
+//---------- Convert 'start', 'middle' and 'end' delays from millimetres to samples --------
+
+          long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;					// Convert start delay into samples at the coarse channel sample rate
+          long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;					// Convert middle delay into samples at the coarse channel sample rate
+          long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;					// Convert end delay into samples at the coarse channel sample rate
+
+//---------- Commit to a whole sample delay and calculate the residuals --------
+
+          long double whole_sample_delay = roundl( middle_sub_s );						// Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
+                                                                                                                // This will be corrected for by shifting coarse channel samples forward and backward in time by whole samples
+
+          start_sub_s  -= whole_sample_delay; 									// Remove the whole sample we're using for this subobs to leave the residual delay that will be done by phase turning
+          middle_sub_s -= whole_sample_delay;                 							// This may still leave more than +/- a half a sample
+          end_sub_s    -= whole_sample_delay;                 							// but it's not allowed to leave more than +/- two whole samples (See Ian's code or IanM for more detail)
+
+//---------- Check it's within the range Ian's code can handle of +/- two whole samples
+
+          if ( (start_sub_s > res_max) || (start_sub_s < res_min ) || (end_sub_s > res_max) || (end_sub_s < res_min) ) {
+            printf( "residual delays out of bounds!\n" );
+          }
+
+//---------- Now treat the start, middle & end residuals as points on a parabola at x=0, x=800, x=1600 ----------
+//      Calculate a, b & c of this parabola in the form: delay = ax^2 + bx + c where x is the (tenth of a) block number
+
+          a = ( start_sub_s - middle_sub_s - middle_sub_s + end_sub_s ) * two_over_num_blocks_sqrd ;                                                          // a = (s+e-2*m)/(n*n/2)
+          b = ( middle_sub_s + middle_sub_s + middle_sub_s + middle_sub_s - start_sub_s - start_sub_s - start_sub_s - end_sub_s ) * one_over_num_blocks;      // b = (4*m-3*s-e)/(n)
+          c = start_sub_s ;                                                                                                                                   // c = s
+
+//      residual delays can now be interpolated for any time using 'ax^2 + bx + c' where x is the time
+
+//---------- We'll be calulating each value in turn so we're better off passing back in a form only needing 2 additions per data point.
+//		The phase-wrap delay correction phase wants the delay at time points of x=.5, x=1.5, x=2.5, x=3.5 etc, so
+//		we'll set an initial value of a×0.5^2 + b×0.5 + c to get the first point and our first step in will be:
+
+          long double initial = a * 0.25L + b * 0.5L + c;							// ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
+          long double delta = a + a + b;									// That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
+          long double delta_delta = a + a;									// ie 2a because it's the 2nd derivative
+
+//---------- int32 maths would be fine for this and very fast provided we scaled the values into range ----------
+//      We want to calcluate in millisamples, and we want to use most of the bits in the int32, so multiply by '1000 x 2^20'
+
+          initial *= conv2int32;
+          delta *= conv2int32;
+          delta_delta *= conv2int32;
+
+//---------- Now convert these long double floats to ints ----------
+
+          rfm->ws_delay = (int16_t) whole_sample_delay;				// whole_sample_delay has already been roundl(ed) somewhere above here
+          rfm->initial_delay = (int32_t) lroundl(initial);                      // The effect of this lroundl will be lost in the noise since it's a factor of 2^20 away from anything visible but lets be consistent
+          rfm->initial_delay += (1 << 19) + (1 << 15); 				// During the >>20 that will come later to get back to millisamples we want to 'round' not truncate so add half of the (1<<20)
+                                                                                // ie (1<<19) also add a few percent (~3%) to the millisample count so that "exact" 0.5s don't round down after cummulative
+                                                                                // addition rounding errors.
+          rfm->delta_delay = (int32_t) lroundl(delta);
+          rfm->delta_delta_delay = (int32_t) lroundl(delta_delta);
+
+//---------- Print out a bunch of debug info ----------
 
           if (debug_mode) {										// Debug logging to screen
-            printf( "%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%d,%d,%d,%d,%Lf,%Lf,%Lf,%f,%s,%f:",
+            printf( "%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%d,%d,%d,%Lf,%Lf,%Lf,%f,%s,%f:",
+            subm->subobs,
             loop,
             rfm->rf_input,
             rfm->Input,
@@ -1568,7 +1698,9 @@ altaz[0].Dist_km
             rfm->Flag,
 //            rfm->Length,
             rfm->Length_f,
-            ( delay_so_far_m * m2s_conv_factor ),
+            ( delay_so_far_start_mm * mm2s_conv_factor ),
+            ( delay_so_far_middle_mm * mm2s_conv_factor ),
+            ( delay_so_far_end_mm * mm2s_conv_factor ),
             rfm->ws_delay,
             rfm->initial_delay,
             rfm->delta_delay,
