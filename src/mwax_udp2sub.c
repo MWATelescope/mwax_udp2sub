@@ -276,6 +276,8 @@
 //#define RECVMMSG_MODE ( MSG_DONTWAIT )
 #define RECVMMSG_MODE ( MSG_WAITFORONE )
 
+#define HOSTNAME_LENGTH 21
+
 #define MONITOR_IP "224.0.2.2"
 #define MONITOR_PORT 8007
 #define MONITOR_TTL 3
@@ -300,27 +302,26 @@ typedef struct mwa_udp_packet {               // Structure format for the MWA da
 } mwa_udp_packet_t ;
 
 typedef struct udp2sub_monitor {               // Structure for the placing monitorable statistics in shared memory so they can be read by external applications
-
-    uint8_t udp2sub_id;                       // Which instance number we are.  Probably from 01 to 26, at least initially.
-    char hostname[21];                        // Host name is looked up to against these strings
-    int coarse_chan;                          // Which coarse chan from 01 to 24.
+    uint8_t udp2sub_id;                        // Which instance number we are.  Probably from 01 to 26, at least initially.
+    char hostname[HOSTNAME_LENGTH];            // Host name is looked up to against these strings
+    int coarse_chan;                           // Which coarse chan from 01 to 24.
+    uint64_t sub_write_sleeps;                 // record how often we went to sleep while looking for a sub file to write out (should grow quickly)
+    // TODO:
     // Last sub file created
     // most advanced udp packet
     // Lowest remaining buffer left
     // Stats on lost packets
-    uint64_t sub_write_sleeps;                  // record how often we went to sleep while looking for a sub file to write out (should grow quickly)
-
-// mon->ignored_for_a_bad_type++;                          // Keep track for debugging of how many packets we've seen that we can't handle
-// mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
-// mon->sub_meta_sleeps++;                                         // record we went to sleep
-// mon->sub_write_sleeps++;                                        // record we went to sleep
-// mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
+    // mon->ignored_for_a_bad_type++;                          // Keep track for debugging of how many packets we've seen that we can't handle
+    // mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
+    // mon->sub_meta_sleeps++;                                         // record we went to sleep
+    // mon->sub_write_sleeps++;                                        // record we went to sleep
+    // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 } udp2sub_monitor_t ;
 
 #pragma pack(pop)                               // Set the structure packing back to 'normal' whatever that is
 
 //---------------- internal structure definitions --------------------
-4
+
 typedef struct altaz_meta {				// Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
 
     INT64 gpstime;
@@ -620,8 +621,8 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
     }
 
     monitor.coarse_chan = coarse_chan;
-    monitor.hostname = config.hostname;
-    monitor.udp2sub_id = config.udp2sub_id;
+    memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
+    monitor.udp2sub_id = config->udp2sub_id;
 }
 
 //===================================================================================================================================================
@@ -2182,7 +2183,7 @@ void *makesub()
     pthread_exit(NULL);
 }
 
-void heartbeat()
+void *heartbeat()
 {
     unsigned char ttl = MONITOR_TTL;
     struct sockaddr_in addr;
@@ -2209,7 +2210,7 @@ void heartbeat()
 
     if (setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_LOOP, (char *) &loopch, sizeof(loopch) ) < 0) {
       perror("setting IP_MULTICAST_LOOP:");
-      close( health_socket );
+      close( monitor_socket );
       terminate = TRUE;
       pthread_exit(NULL);
     }
@@ -2219,7 +2220,7 @@ void heartbeat()
 
     if (setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_IF, (char *) &localInterface, sizeof(localInterface) ) < 0) {
       perror("setting local interface");
-      close( health_socket );
+      close( monitor_socket );
       terminate = TRUE;
       pthread_exit(NULL);
     }
@@ -2420,7 +2421,7 @@ int main(int argc, char **argv)
       exit(EXIT_FAILURE);                                               // and give up!
     }
 
-//---------------- We're ready to fire up the three worker threads now ------------------------
+//---------------- We're ready to fire up the four worker threads now ------------------------
 
     printf("Firing up pthreads\n");
     fflush(stdout);
@@ -2433,6 +2434,9 @@ int main(int argc, char **argv)
 
     pthread_t makesub_pt;
     pthread_create(&makesub_pt,NULL,makesub,NULL);                      // Fire up the process to generate sub files from raw packets and pointers
+
+    pthread_t monitor_pt;
+    pthread_create(&monitor_pt,NULL,heartbeat,NULL);
 
 //---------------- The threads are off and running.  Now we just wait for a message to terminate, like a signal or a fatal error ------------------------
 
