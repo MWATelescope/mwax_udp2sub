@@ -479,10 +479,10 @@ typedef struct udp2sub_config {               // Structure for the configuration
 
     INT64 UDP_num_slots;                      // The number of UDP buffers to assign.  Must be ~>=3000000 for 128T array
 
-    unsigned int cpu_mask_parent;               // Allowed cpus for the parent thread which reads metafits file
-    unsigned int cpu_mask_UDP_recv;             // Allowed cpus for the thread that needs to pull data out of the NIC super fast
-    unsigned int cpu_mask_UDP_parse;            // Allowed cpus for the thread that checks udp packets to create backwards pointer lists
-    unsigned int cpu_mask_makesub;              // Allowed cpus for the thread that writes the sub files out to memory
+    unsigned int cpu_mask_parent;             // Allowed cpus for the parent thread which reads metafits file
+    unsigned int cpu_mask_UDP_recv;           // Allowed cpus for the thread that needs to pull data out of the NIC super fast
+    unsigned int cpu_mask_UDP_parse;          // Allowed cpus for the thread that checks udp packets to create backwards pointer lists
+    unsigned int cpu_mask_makesub;           // Allowed cpus for the thread that writes the sub files out to memory
 
     char shared_mem_dir[40];                  // The name of the shared memory directory where we get .free files from and write out .sub files
     char temp_file_name[40];                  // The name of the temporary file we use.  If multiple copies are running on each server, these may need to be different
@@ -501,115 +501,24 @@ typedef struct udp2sub_config {               // Structure for the configuration
 
 udp2sub_config_t conf;                          // A place to store the configuration data for this instance of the program.  ie of the 60 copies running on 10 computers or whatever
 
-void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config )
-{
+void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config ) {
 
-#define MAXINSTANCE (29)
+    int num_instances = 0;                                      // Number of instance records loaded
+    int instance_ndx = 0;                                       // Start out assuming we don't appear in the list
 
-    int instance_ndx = 0;                                                                       // Start out assuming we don't appear in the list
+    udp2sub_config_t *available_config = NULL;
+    load_config_file(file, &available_config);
 
-    udp2sub_config_t available_config[MAXINSTANCE] = {
+    if(available_config == NULL) {
+      fprintf(stderr, "Failed to load instance configuration data.");
+      exit(1);
+    }
 
-       {0,"unknown",0,8388608,255,255,255,255,"","","","","","",0,"",0}
-
-      ,{ 1,"mwax01",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.201", 1,"239.255.90.1" ,59001}
-      ,{ 2,"mwax02",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.202", 2,"239.255.90.2" ,59002}
-      ,{ 3,"mwax03",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.203", 3,"239.255.90.3" ,59003}
-      ,{ 4,"mwax04",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.204", 4,"239.255.90.4" ,59004}
-      ,{ 5,"mwax05",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.205", 5,"239.255.90.5" ,59005}
-      ,{ 6,"mwax06",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.206", 6,"239.255.90.6" ,59006}
-      ,{ 7,"mwax07",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.207", 7,"239.255.90.7" ,59007}
-      ,{ 8,"mwax08",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.208", 8,"239.255.90.8" ,59008}
-      ,{ 9,"mwax09",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.209", 9,"239.255.90.9" ,59009}
-      ,{10,"mwax10",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",10,"239.255.90.10",59010}
-      ,{11,"mwax11",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",11,"239.255.90.11",59011}
-      ,{12,"mwax12",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.212",12,"239.255.90.12",59012}
-      ,{13,"mwax13",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.213",13,"239.255.90.13",59013}
-      ,{14,"mwax14",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.214",14,"239.255.90.14",59014}
-      ,{15,"mwax15",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.215",15,"239.255.90.15",59015}
-      ,{16,"mwax16",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.216",16,"239.255.90.16",59016}
-      ,{17,"mwax17",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.217",17,"239.255.90.17",59017}
-      ,{18,"mwax18",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.218",18,"239.255.90.18",59018}
-      ,{19,"mwax19",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.219",19,"239.255.90.19",59019}
-      ,{20,"mwax20",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.220",20,"239.255.90.20",59020}
-      ,{21,"mwax21",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.221",21,"239.255.90.21",59021}
-      ,{22,"mwax22",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.222",22,"239.255.90.22",59022}
-      ,{23,"mwax23",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.223",23,"239.255.90.23",59023}
-      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",24,"239.255.90.24",59024}
-      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225", 2,"239.255.90.2" ,59002}
-      ,{26,"mwax26",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.226",12,"239.255.90.12",59012}
-      ,{27,"blc00" ,0,3500000,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.240",12,"239.255.90.12",59012}
-
-//      ,{24,"mwax24",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.224",9,"239.255.90.9",59009}
-//      ,{25,"mwax25",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.225",9,"239.255.90.9",59009}
-
-      ,{28,"mwax101",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.191",10,"239.255.90.10",59010}
-//      ,{3,"mwax102",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.192",11,"239.255.90.11",59011}
-//      ,{4,"mwax103",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.193",12,"239.255.90.12",59012}
-
-//      ,{4,"mwax104",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.194",12,"239.255.90.12",59012}
-//      ,{5,"mwax105",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.195",13,"239.255.90.13",59013}
-//      ,{6,"mwax106",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.196",14,"239.255.90.14",59014}
-
-//      ,{5,"mwax107", 0,8388608,131072,512,8192,32768,"/dev/shm/mwax","/dev/shm/mwax0.temp","/mwax_stats","","/vulcan/metafits","192.168.90.197",13,"239.255.90.13",59013}
-
-//      ,{8,"mwax107",10,8388608,131072,512,8192,32768,"/dev/shm/mwax","/dev/shm/mwax11.temp","/mwax_stats","","/vulcan/metafits","192.168.90.197",10,"239.255.90.10",59010}
-//      ,{9,"mwax107",12,8388608,131072,512,8192,32768,"/dev/shm/mwax","/dev/shm/mwax12.temp","/mwax_stats","","/vulcan/metafits","192.168.90.197",12,"239.255.90.12",59012}
-//      ,{10,"mwax107",13,8388608,131072,512,8192,32768,"/dev/shm/mwax","/dev/shm/mwax13.temp","/mwax_stats","","/vulcan/metafits","192.168.90.197",13,"239.255.90.13",59013}
-
-//    ,{11,"mwax0a", 0,8388608,128,2,64,4,"/dev/shm/mwax","/dev/shm/mwax0.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",16,"239.255.90.16",59016}
-//    ,{12,"mwax0a",11,8388608,128,2,64,4,"/dev/shm/mwax","/dev/shm/mwax11.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",11,"239.255.90.11",59011}
-//    ,{13,"mwax0a",12,8388608,128,2,64,4,"/dev/shm/mwax","/dev/shm/mwax12.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",12,"239.255.90.12",59012}
-//    ,{14,"mwax0a",13,8388608,128,2,64,4,"/dev/shm/mwax","/dev/shm/mwax13.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",13,"239.255.90.13",59013}
-
-//      ,{11,"mwax0a", 0,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax16.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",16,"239.255.90.16",59016}
-//      ,{12,"mwax0a",11,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax11.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",11,"239.255.90.11",59011}
-//      ,{13,"mwax0a",12,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax12.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",12,"239.255.90.12",59012}
-//      ,{14,"mwax0a",13,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax13.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",13,"239.255.90.13",59013}
-//      ,{15,"mwax0a",14,8388608,4096,8192,16384,32768,"/dev/shm/mwax","/dev/shm/mwax14.temp","/mwax_stats","","/vulcan/metafits","192.168.90.210",14,"239.255.90.14",59014}
-
-//      ,{11,"mwax0d", 0,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax16.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",12,"239.255.90.12",59012}
-//      ,{12,"mwax0d",10,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax11.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",10,"239.255.90.10",59010}
-//      ,{13,"mwax0d",11,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax12.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",11,"239.255.90.11",59011}
-//      ,{14,"mwax0d",13,8388608,256,512,1024,2048,"/dev/shm/mwax","/dev/shm/mwax13.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",13,"239.255.90.13",59013}
-//      ,{15,"mwax0d",14,8388608,4096,8192,16384,32768,"/dev/shm/mwax","/dev/shm/mwax14.temp","/mwax_stats","","/vulcan/metafits","192.168.90.211",14,"239.255.90.14",59014}
-
-//      ,{8,"medconv01",1,8388608,255,255,255,255,"/dev/shm","/dev/shm/temp.temp1","/mwax1_stats","","/vulcan/metafits","192.168.90.121",10,"239.255.90.10",59010}
-//      ,{9,"medconv01",2,8388608,255,255,255,255,"/dev/shm","/dev/shm/temp.temp2","/mwax2_stats","","/vulcan/metafits","192.168.90.122",11,"239.255.90.11",59011}
-
-//      ,{10,"recsim",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.227",11,"239.255.90.11",59011}
-//      ,{6,"blc00",0,3500000,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.240",9,"239.255.90.9",59009}
-
-/*
-      ,{12,"ibm-p8-01",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","192.168.90.212",11,"239.255.90.11",59011}
-
-      ,{13,"vcs01",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.131",11,"239.255.90.11",59011}
-      ,{14,"vcs02",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.132",11,"239.255.90.11",59011}
-      ,{15,"vcs03",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.133",11,"239.255.90.11",59011}
-      ,{16,"vcs04",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.134",11,"239.255.90.11",59011}
-      ,{17,"vcs05",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.135",11,"239.255.90.11",59011}
-      ,{18,"vcs06",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.136",11,"239.255.90.11",59011}
-      ,{19,"vcs07",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.137",11,"239.255.90.11",59011}
-      ,{20,"vcs08",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.138",11,"239.255.90.11",59011}
-      ,{21,"vcs09",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.139",11,"239.255.90.11",59011}
-      ,{22,"vcs10",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.140",11,"239.255.90.11",59011}
-      ,{23,"vcs11",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.141",11,"239.255.90.11",59011}
-      ,{24,"vcs12",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.142",11,"239.255.90.11",59011}
-      ,{25,"vcs13",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.143",11,"239.255.90.11",59011}
-      ,{26,"vcs14",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.144",11,"239.255.90.11",59011}
-      ,{27,"vcs15",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.145",11,"239.255.90.11",59011}
-      ,{28,"vcs16",0,8388608,255,255,255,255,"/dev/shm/mwax","/dev/shm/mwax.temp","/mwax_stats","","/vulcan/metafits","202.9.9.146",11,"239.255.90.11",59011}
-*/
-
-    };
-
-    for ( int loop = 0 ; loop < MAXINSTANCE ; loop++ ) {        // Check through all possible configurations
-
+    for (int loop = 0 ; loop < num_instances; loop++ ) {        // Check through all possible configurations
       if ( ( strcmp( available_config[loop].hostname, us ) == 0 ) && ( available_config[loop].host_instance == inst ) ) {
         instance_ndx = loop;                                    // if the edt card config matches the command line and the hostname matches
         break;                                                  // We don't need to keep looking
       }
-
     }
 
     *config = available_config[ instance_ndx ];                 // Copy the relevant line into the structure we were passed a pointer to
@@ -623,6 +532,120 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
     monitor.coarse_chan = coarse_chan;
     memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
     monitor.udp2sub_id = config->udp2sub_id;
+}
+
+//---------------------------------------------------------------------------------------------------------------------------------------------------
+// load_channel_map - Load config from a CSV file.
+//---------------------------------------------------------------------------------------------------------------------------------------------------
+
+int load_config_file(char *path, udp2sub_config_t **config_records) {
+  fprintf(stderr, "Reading configuration from %s\n", path);
+  // Read the whole input file into a buffer.
+  char *data, *datap;
+  FILE *file;
+  size_t sz;
+  file = fopen(path, "r");
+  fseek(file, 0, SEEK_END);
+  sz = ftell(file);
+  rewind(file);
+  data = datap = malloc(sz + 1);
+  data[sz] = '\n'; // Simplifies parsing slightly
+  fread(data, 1, sz - 1, file);
+  fclose(file);
+
+  udp2sub_config_t *records;
+  int max_rows = sz / 26;                  // Minimum row size is 26, pre-allocate enough
+  int row_sz = sizeof(udp2sub_config_t);   // room for the worst case and `realloc` later
+  records = calloc(max_rows, row_sz);      // when the size is known.
+
+  int result = -1;
+  int row = 0, col = 0;              // Current row and column in input table
+  char *sep = ",";                   // Next expected separator
+  char *end = NULL;                  // Mark where `strtol` stops parsing
+  char *tok = strsep(&datap, sep);   // Pointer to start of next value in input
+  while (row < max_rows) {
+    while (col < 17) {
+      switch (col) {
+      case 0:
+        records[row].udp2sub_id = strtol(tok, &end, 10); // Parse the current token as a number,
+        if (end == NULL || *end != '\0') goto done;           // consuming the whole token, or abort.
+        break;
+      case 1:
+        strcpy(records[row].hostname, tok);
+        break;
+      case 2:
+        records[row].host_instance = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 3:
+        records[row].UDP_num_slots = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 4:
+        records[row].cpu_mask_parent = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 5:
+        records[row].cpu_mask_UDP_recv = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 6:
+        records[row].cpu_mask_UDP_parse = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 7:
+        records[row].cpu_mask_makesub = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 8:
+        strcpy(records[row].shared_mem_dir, tok);
+        break;
+      case 9:
+        strcpy(records[row].temp_file_name, tok);
+        break;
+      case 10:
+        strcpy(records[row].stats_file_name, tok);
+        break;
+      case 11:
+        strcpy(records[row].spare_str, tok);
+        break;
+      case 12:
+        strcpy(records[row].metafits_dir, tok);
+        break;
+      case 13:
+        strcpy(records[row].local_if, tok);
+        break;
+      case 14:
+        records[row].coarse_chan = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      case 15:
+        strcpy(records[row].multicast_ip, tok);
+        break;
+      case 16:
+        records[row].UDPport = strtol(tok, &end, 10);
+        if (end == NULL || *end != '\0') goto done;
+        break;
+      }
+
+      if (col == 15)      // If we've parsed the second-to-last column,
+        sep = "\n";       // the next separator to expect will be LF.
+      else if (col == 16) // If we've parsed the last column, the next
+        sep = ",";        // separator will be a comma again.
+      col++;
+
+      tok = strsep(&datap, sep); // Get the next token from the input and
+      if (tok == NULL) goto done; // abort the row if we don't find one.
+    }
+    if (col == 17) col = 0; // Wrap to column 0 if we parsed a full row
+    else break;             // or abort if we didn't.
+    row++;
+  }
+done:
+  *config_records = reallocarray(records, row + 1, sizeof(udp2sub_config_t));
+  free(data);
+  fprintf(stderr, "%d instance record(s) found.\n", row + 1);
+  return row + 1;
 }
 
 //===================================================================================================================================================
@@ -2288,7 +2311,7 @@ int main(int argc, char **argv)
 
     int instance = 0;                                           // Assume we're the first (or only) instance on this server
     int chan_override = 0;                                      // Assume we are going to use the default coarse channel for this instance
-    char *conf_file = "mwax.conf";                              // Default configuration file. Probably should be on vulcan eventually.
+    char *conf_file = "/vulcan/mwax_config/mwax_u2s.cfg";       // Default configuration path
 
     while (argc > 1 && argv[1][0] == '-') {
       switch (argv[1][1]) {
