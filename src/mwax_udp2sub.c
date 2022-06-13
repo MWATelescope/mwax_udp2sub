@@ -310,6 +310,8 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     int subobs_state;                          // Subobservation state
     int udp_count;                             // Number of UDP packets collected from the NIC for this subobservation
     int udp_dummy;                             // Number of dummy packets we have needed to insert to pad things out for this subobservation
+} udp2sub_monitor_t ;
+
     // TODO:
     // Last sub file created
     // most advanced udp packet
@@ -320,7 +322,6 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     // mon->sub_meta_sleeps++;                                         // record we went to sleep
     // mon->sub_write_sleeps++;                                        // record we went to sleep
     // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
-} udp2sub_monitor_t ;
 
 //        printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
 //            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
@@ -509,38 +510,6 @@ typedef struct udp2sub_config {               // Structure for the configuration
 
 udp2sub_config_t conf;                          // A place to store the configuration data for this instance of the program.  ie of the 60 copies running on 10 computers or whatever
 
-void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config ) {
-
-    int num_instances = 0;                                      // Number of instance records loaded
-    int instance_ndx = 0;                                       // Start out assuming we don't appear in the list
-
-    udp2sub_config_t *available_config = NULL;
-    load_config_file(file, &available_config);
-
-    if(available_config == NULL) {
-      fprintf(stderr, "Failed to load instance configuration data.");
-      exit(1);
-    }
-
-    for (int loop = 0 ; loop < num_instances; loop++ ) {        // Check through all possible configurations
-      if ( ( strcmp( available_config[loop].hostname, us ) == 0 ) && ( available_config[loop].host_instance == inst ) ) {
-        instance_ndx = loop;                                    // if the edt card config matches the command line and the hostname matches
-        break;                                                  // We don't need to keep looking
-      }
-    }
-
-    *config = available_config[ instance_ndx ];                 // Copy the relevant line into the structure we were passed a pointer to
-
-    if ( coarse_chan > 0 ) {                                    // If there is a coarse channel override on the command line
-      config->coarse_chan = coarse_chan;                        // Force the coarse chan from 01 to 24 with that value
-      sprintf( config->multicast_ip, "239.255.90.%d", coarse_chan );            // Multicast ip is 239.255.90.xx
-      config->UDPport = 59000 + coarse_chan;                    // Multicast port address is the forced coarse channel number plus an offset of 59000
-    }
-
-    monitor.coarse_chan = coarse_chan;
-    memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
-    monitor.udp2sub_id = config->udp2sub_id;
-}
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // load_channel_map - Load config from a CSV file.
@@ -566,7 +535,6 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   int row_sz = sizeof(udp2sub_config_t);   // room for the worst case and `realloc` later
   records = calloc(max_rows, row_sz);      // when the size is known.
 
-  int result = -1;
   int row = 0, col = 0;              // Current row and column in input table
   char *sep = ",";                   // Next expected separator
   char *end = NULL;                  // Mark where `strtol` stops parsing
@@ -654,6 +622,40 @@ done:
   free(data);
   fprintf(stderr, "%d instance record(s) found.\n", row + 1);
   return row + 1;
+}
+
+
+void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config ) {
+
+    int num_instances = 0;                                      // Number of instance records loaded
+    int instance_ndx = 0;                                       // Start out assuming we don't appear in the list
+
+    udp2sub_config_t *available_config = NULL;
+    num_instances = load_config_file(file, &available_config);
+
+    if(available_config == NULL) {
+      fprintf(stderr, "Failed to load instance configuration data.");
+      exit(1);
+    }
+
+    for (int loop = 0 ; loop < num_instances; loop++ ) {        // Check through all possible configurations
+      if ( ( strcmp( available_config[loop].hostname, us ) == 0 ) && ( available_config[loop].host_instance == inst ) ) {
+        instance_ndx = loop;                                    // if the edt card config matches the command line and the hostname matches
+        break;                                                  // We don't need to keep looking
+      }
+    }
+
+    *config = available_config[ instance_ndx ];                 // Copy the relevant line into the structure we were passed a pointer to
+
+    if ( coarse_chan > 0 ) {                                    // If there is a coarse channel override on the command line
+      config->coarse_chan = coarse_chan;                        // Force the coarse chan from 01 to 24 with that value
+      sprintf( config->multicast_ip, "239.255.90.%d", coarse_chan );            // Multicast ip is 239.255.90.xx
+      config->UDPport = 59000 + coarse_chan;                    // Multicast port address is the forced coarse channel number plus an offset of 59000
+    }
+
+    monitor.coarse_chan = coarse_chan;
+    memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
+    monitor.udp2sub_id = config->udp2sub_id;
 }
 
 //===================================================================================================================================================
