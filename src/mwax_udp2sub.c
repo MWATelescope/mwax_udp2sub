@@ -306,6 +306,10 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     char hostname[HOSTNAME_LENGTH];            // Host name is looked up to against these strings
     int coarse_chan;                           // Which coarse chan from 01 to 24.
     uint64_t sub_write_sleeps;                 // record how often we went to sleep while looking for a sub file to write out (should grow quickly)
+    uint32_t current_subobs;                   // Subobservation in progress
+    int subobs_state;                          // Subobservation state
+    int udp_count;                             // Number of UDP packets collected from the NIC for this subobservation
+    int udp_dummy;                             // Number of dummy packets we have needed to insert to pad things out for this subobservation
     // TODO:
     // Last sub file created
     // most advanced udp packet
@@ -317,6 +321,10 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     // mon->sub_write_sleeps++;                                        // record we went to sleep
     // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 } udp2sub_monitor_t ;
+
+//        printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
+//            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
+
 
 #pragma pack(pop)                               // Set the structure packing back to 'normal' whatever that is
 
