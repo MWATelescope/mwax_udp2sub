@@ -1651,15 +1651,15 @@ altaz[0].Dist_km
 
           if ( subm->GEODEL >= 1 ){										// GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
 
-            delay_so_far_start_mm +=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
                                         ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
                                         ( rfm->Height * subm->altaz[ 0 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
 
-            delay_so_far_middle_mm += ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            delay_so_far_middle_mm -= ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
                                         ( rfm->East * subm->altaz[ 1 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
                                         ( rfm->Height * subm->altaz[ 1 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
 
-            delay_so_far_end_mm +=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            delay_so_far_end_mm -=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
                                         ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
                                         ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
           }
