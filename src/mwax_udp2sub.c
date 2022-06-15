@@ -4,8 +4,10 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 80
+#define BUILD 81
 #define THISVER "2.04f"
+//
+// 2.04f-080    2022-06-15 LAW  Config file loading, heartbeat thread (current disabled), delay tracking fix
 //
 // 2.04f-080    2022-05-05 BWC  Delay tracking of sources now implemented. Merged channel mapping from GJS patch of build 79
 //
