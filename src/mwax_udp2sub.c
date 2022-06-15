@@ -7,6 +7,8 @@
 #define BUILD 80
 #define THISVER "2.04f"
 //
+// 2.04f-081    2022-05-05 LAW  Fix delay tracking sign error
+//
 // 2.04f-080    2022-05-05 BWC  Delay tracking of sources now implemented. Merged channel mapping from GJS patch of build 79
 //
 // 2.04e-079    2022-05-02 GJS  Minor change of MWAX-to-channel mapping (mwax25 -> Ch02).  Also non-released fork of 'Implement more cable delays from metafits'
