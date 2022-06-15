@@ -539,7 +539,6 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   }
   data = datap = malloc(sz + 1);
   data[sz] = '\n'; // Simplifies parsing slightly
-  fread(data, 1, sz - 1, file);
   if(fread(data, 1, sz-1, file) != sz) {
     fprintf(stderr, "Failed reading %s - unexpected data length.", path);
     return 3;
