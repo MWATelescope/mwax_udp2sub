@@ -4,10 +4,12 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 81
+#define BUILD 82
 #define THISVER "2.04f"
 //
-// 2.04f-080    2022-06-15 LAW  Config file loading, heartbeat thread (current disabled), delay tracking fix
+// 2.04f-082    2022-06-15 LAW  Additional error checking around config file loader
+//
+// 2.04f-081    2022-06-15 LAW  Config file loading, heartbeat thread (current disabled), delay tracking fix
 //
 // 2.04f-080    2022-05-05 BWC  Delay tracking of sources now implemented. Merged channel mapping from GJS patch of build 79
 //
@@ -524,12 +526,24 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   FILE *file;
   size_t sz;
   file = fopen(path, "r");
+    if(file == NULL) {
+    fprintf(stderr, "Failed to open %s", path);
+    return 1;
+  }
   fseek(file, 0, SEEK_END);
   sz = ftell(file);
   rewind(file);
+  if(sz == -1) {
+    fprintf(stderr, "Failed to determine file size: %s", path);
+    return 2;
+  }
   data = datap = malloc(sz + 1);
   data[sz] = '\n'; // Simplifies parsing slightly
   fread(data, 1, sz - 1, file);
+  if(fread(data, 1, sz-1, file) != sz) {
+    fprintf(stderr, "Failed reading %s - unexpected data length.", path);
+    return 3;
+  }
   fclose(file);
 
   udp2sub_config_t *records;
