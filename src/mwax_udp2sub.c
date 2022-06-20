@@ -2149,14 +2149,14 @@ void *makesub()
             uint16_t row = subm->rf2ndx[rfm->rf_input];
             char **packets = subm->udp_volts[row];
             for (int t=0; t<UDP_PER_RF_PER_SUB; t+=8) {
-              UINT8 bitmap = (packets[t]   == NULL) << 7
-                           | (packets[t+1] == NULL) << 6
-                           | (packets[t+2] == NULL) << 5
-                           | (packets[t+3] == NULL) << 4
-                           | (packets[t+4] == NULL) << 3
-                           | (packets[t+5] == NULL) << 2
-                           | (packets[t+6] == NULL) << 1
-                           | (packets[t+7] == NULL);
+              UINT8 bitmap = (packets[t]   != NULL) << 7
+                           | (packets[t+1] != NULL) << 6
+                           | (packets[t+2] != NULL) << 5
+                           | (packets[t+3] != NULL) << 4
+                           | (packets[t+4] != NULL) << 3
+                           | (packets[t+5] != NULL) << 2
+                           | (packets[t+6] != NULL) << 1
+                           | (packets[t+7] != NULL);
               dummy_map[(MandC_rf * UDP_PER_RF_PER_SUB + t)/ 8] = bitmap;
             }
           }
