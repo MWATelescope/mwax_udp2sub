@@ -442,6 +442,7 @@ typedef struct subobs_udp_meta {                        // Structure format for 
 
     altaz_meta_t altaz[3];				// The AltAz at the beginning, middle and end of the 8 second sub-observation
 
+
 } subobs_udp_meta_t;
 
 typedef struct MandC_meta {                             // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets.  Array with one entry per rf_input
@@ -1852,6 +1853,7 @@ void *makesub()
 
     mwa_udp_packet_t dummy_udp={0};                                     // Make a dummy udp packet full of zeros and NULLs.  We'll use this to stand in for every missing packet!
     void *dummy_volt_ptr = &dummy_udp.volts[0];                         // and we'll remember where we can find UDP_PAYLOAD_SIZE (4096LL) worth of zeros
+    UINT8 *dummy_map; /* = calloc(active_rf_inputs*UDP_PER_RF_PER_SUB/8, 1); */ // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
 
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
     tile_meta_t *rfm;							// Pointer to the tile metadata for the tile I'm working on
@@ -1994,7 +1996,7 @@ void *makesub()
           "NINPUTS %d\n"
           "NINPUTS_XGPU %d\n"
           "APPLY_PATH_WEIGHTS 0\n"
-          "APPLY_PATH_DELAYS 0\n"
+          "APPLY_PATH_DELAYS %d\n"
           "INT_TIME_MSEC %d\n"
           "FSCRUNCH_FACTOR %d\n"
           "APPLY_VIS_WEIGHTS 0\n"
@@ -2017,7 +2019,7 @@ void *makesub()
           ;
 
         sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
-              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
+              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
               conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
@@ -2132,11 +2134,32 @@ void *makesub()
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
+          dummy_map = dest;
+
           // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
           // 'block1_add points to the address at the beginning of block 1.  The remainder of block 0 needs to be null filled
 
           memset( dest, 0, block1_add - dest );					// Write out a bunch of nulls to line us up with the first voltage block (ie block 1)
           dest = block1_add;							// And set our write pointer to the beginning of block 1
+
+//---------- Write out the dummy map ----------
+
+          for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
+            rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
+            uint16_t row = subm->rf2ndx[rfm->rf_input];
+            char **packets = subm->udp_volts[row];
+            for (int t=0; t<UDP_PER_RF_PER_SUB; t+=8) {
+              UINT8 bitmap = (packets[t]   == NULL) << 7
+                           | (packets[t+1] == NULL) << 6
+                           | (packets[t+2] == NULL) << 5
+                           | (packets[t+3] == NULL) << 4
+                           | (packets[t+4] == NULL) << 3
+                           | (packets[t+5] == NULL) << 2
+                           | (packets[t+6] == NULL) << 1
+                           | (packets[t+7] == NULL);
+              dummy_map[(MandC_rf * UDP_PER_RF_PER_SUB + t)/ 8] = bitmap;
+            }
+          }
 
 //---------- Write out the voltage data blocks ----------
 
