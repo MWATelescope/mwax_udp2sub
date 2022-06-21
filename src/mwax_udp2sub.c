@@ -2136,7 +2136,7 @@ void *makesub()
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
-          dummy_map = dest;
+          dummy_map = (UINT8*) dest;
 
           // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
           // 'block1_add points to the address at the beginning of block 1.  The remainder of block 0 needs to be null filled
