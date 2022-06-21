@@ -2144,20 +2144,23 @@ void *makesub()
 
 //---------- Write out the dummy map ----------
 
+	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%lld)\n", 
+	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
+	 		  ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8);
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
             uint16_t row = subm->rf2ndx[rfm->rf_input];
             char **packets = subm->udp_volts[row];
-            for (int t=0; t<UDP_PER_RF_PER_SUB; t+=8) {
-              UINT8 bitmap = (packets[t]   != NULL) << 7
-                           | (packets[t+1] != NULL) << 6
-                           | (packets[t+2] != NULL) << 5
-                           | (packets[t+3] != NULL) << 4
-                           | (packets[t+4] != NULL) << 3
-                           | (packets[t+5] != NULL) << 2
-                           | (packets[t+6] != NULL) << 1
-                           | (packets[t+7] != NULL);
-              dummy_map[(MandC_rf * UDP_PER_RF_PER_SUB + t)/ 8] = bitmap;
+            for (int t=0; t<UDP_PER_RF_PER_SUB-2; t+=8) {
+              UINT8 bitmap = (packets[t+1] != NULL) << 7
+                           | (packets[t+2] != NULL) << 6
+                           | (packets[t+3] != NULL) << 5
+                           | (packets[t+4] != NULL) << 4
+                           | (packets[t+5] != NULL) << 3
+                           | (packets[t+6] != NULL) << 2
+                           | (packets[t+7] != NULL) << 1
+                           | (packets[t+8] != NULL);
+              dummy_map[(MandC_rf * (UDP_PER_RF_PER_SUB-2) + t)/ 8] = bitmap;
             }
           }
 
