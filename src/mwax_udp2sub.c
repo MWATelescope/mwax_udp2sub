@@ -4,8 +4,10 @@
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 82
-#define THISVER "2.04f"
+#define BUILD 83
+#define THISVER "2.05a"
+//
+// 2.05a-083    2022-06-21 LAW  Fix APPLY_CABLE_DELAYS flag, write map of dummy UDP packets to subfile block 0.
 //
 // 2.04f-082    2022-06-15 LAW  Additional error checking around config file loader
 //
@@ -2144,9 +2146,9 @@ void *makesub()
 
 //---------- Write out the dummy map ----------
 
-	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%lld)\n", 
-	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
-	 		  ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8);
+//	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%lld)\n", 
+//	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
+//	 		  ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8);
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
             uint16_t row = subm->rf2ndx[rfm->rf_input];
