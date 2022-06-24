@@ -2511,8 +2511,8 @@ int main(int argc, char **argv)
     pthread_t makesub_pt;
     pthread_create(&makesub_pt,NULL,makesub,NULL);                      // Fire up the process to generate sub files from raw packets and pointers
 
-    //pthread_t monitor_pt;
-    //pthread_create(&monitor_pt,NULL,heartbeat,NULL);
+    pthread_t monitor_pt;
+    pthread_create(&monitor_pt,NULL,heartbeat,NULL);
 
 //---------------- The threads are off and running.  Now we just wait for a message to terminate, like a signal or a fatal error ------------------------
 
