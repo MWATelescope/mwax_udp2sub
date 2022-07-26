@@ -2,10 +2,13 @@
 // Capture UDP packets into a temporary, user space buffer and then sort/copy/process them into some output array
 //
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
+//            LAW Luke Williams luke.a.williams@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 83
-#define THISVER "2.05a"
+#define BUILD 84
+#define THISVER "2.06a"
+//
+// 2.06a-084    2022-07-26 LAW  Enable heartbeat thread, add monitor interface to config file, CLI options to force cable/geometric delays.
 //
 // 2.05a-083    2022-06-21 LAW  Fix APPLY_CABLE_DELAYS flag, write map of dummy UDP packets to subfile block 0.
 //
@@ -479,6 +482,8 @@ char *blank_sub_line;                                   // Pointer to a buffer o
 char *sub_header;                                       // Pointer to a buffer that's the size of a sub file header.
 
 BOOL debug_mode = FALSE;                                // Default to not being in debug mode
+BOOL force_cable_delays = FALSE;                        // Always apply cable delays, regardless of metafits
+BOOL force_geo_delays = FALSE;                          // Always apply geometric delays, regardless of metafits
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // read_config - use our hostname and a command line parameter to find ourselves in the list of possible configurations
@@ -510,6 +515,7 @@ typedef struct udp2sub_config {               // Structure for the configuration
     int coarse_chan;                          // Which coarse chan from 01 to 24.
     char multicast_ip[30];                    // The multicast address and port (below) we wish to join.
     int UDPport;                              // Multicast port address
+    char monitor_if[20];                      // Local interface address for monitoring packets
 
 } udp2sub_config_t ;
 
@@ -549,7 +555,7 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   fclose(file);
 
   udp2sub_config_t *records;
-  int max_rows = sz / 26;                  // Minimum row size is 26, pre-allocate enough
+  int max_rows = sz / 28;                  // Minimum row size is 28, pre-allocate enough
   int row_sz = sizeof(udp2sub_config_t);   // room for the worst case and `realloc` later
   records = calloc(max_rows, row_sz);      // when the size is known.
 
@@ -558,7 +564,7 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   char *end = NULL;                  // Mark where `strtol` stops parsing
   char *tok = strsep(&datap, sep);   // Pointer to start of next value in input
   while (row < max_rows) {
-    while (col < 17) {
+    while (col < 18) {
       switch (col) {
       case 0:
         records[row].udp2sub_id = strtol(tok, &end, 10); // Parse the current token as a number,
@@ -620,18 +626,21 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
         records[row].UDPport = strtol(tok, &end, 10);
         if (end == NULL || *end != '\0') goto done;
         break;
+      case 17:
+        strcpy(records[row].monitor_if, tok);
+        break;
       }
 
-      if (col == 15)      // If we've parsed the second-to-last column,
+      if (col == 16)      // If we've parsed the second-to-last column,
         sep = "\n";       // the next separator to expect will be LF.
-      else if (col == 16) // If we've parsed the last column, the next
+      else if (col == 17) // If we've parsed the last column, the next
         sep = ",";        // separator will be a comma again.
       col++;
 
       tok = strsep(&datap, sep); // Get the next token from the input and
       if (tok == NULL) goto done; // abort the row if we don't find one.
     }
-    if (col == 17) col = 0; // Wrap to column 0 if we parsed a full row
+    if (col == 18) col = 0; // Wrap to column 0 if we parsed a full row
     else break;             // or abort if we didn't.
     row++;
   }
@@ -684,8 +693,8 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
 int set_cpu_affinity ( unsigned int mask )
 {
 
-    cpu_set_t my_cpu_set;                       // Make a CPU affinity set for this thread
-    CPU_ZERO( &my_cpu_set );                    // Zero it out completely
+    cpu_set_t my_cpu_set;                                       // Make a CPU affinity set for this thread
+    CPU_ZERO( &my_cpu_set );                                    // Zero it out completely
 
     for ( int loop = 0 ; loop < 32 ; loop++ ) {                 // Support up to 32 cores for now.  We need to step through them from LSB to MSB
 
@@ -989,7 +998,7 @@ void *UDP_parse()
           this_sub->rf2ndx[ my_udp->rf_input ] = this_sub->rf_seen;     // and assign that number for this rf input's metadata index
           rf_ndx = this_sub->rf_seen;                                   // and get the correct index for this packet too because we'll need that
         }       // WIP Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
-
+      
         this_sub->udp_volts[ rf_ndx ][ my_udp->subsec_time ] = (char *) my_udp->volts;          // This is an important line so lets unpack what it does and why.
         // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in which they were seen on
         // the incoming packet stream) and the packet count (0 to 5001) inside the subobs. By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
@@ -1224,7 +1233,7 @@ void add_meta_fits()
 
             fits_read_key( fptr, TINT, "CABLEDEL", &(subm->CABLEDEL), NULL, &status );                  // Read the CABLEDEL field. 0=Don't apply. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
 
-if (debug_mode) subm->CABLEDEL = 1;
+if (debug_mode || force_cable_delays) subm->CABLEDEL = 1;
 
             if (status) {
               printf ( "Failed to read CABLEDEL\n" );
@@ -1233,7 +1242,7 @@ if (debug_mode) subm->CABLEDEL = 1;
 
             fits_read_key( fptr, TINT, "GEODEL", &(subm->GEODEL), NULL, &status );			// Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
 
-if (debug_mode) subm->GEODEL = 3;
+if (debug_mode || force_geo_delays) subm->GEODEL = 3;
 
             if (status) {
               printf ( "Failed to read GEODEL\n" );
@@ -2292,7 +2301,7 @@ void *heartbeat()
     }
 
     // Set local interface for outbound multicast datagrams. The IP address specified must be associated with a local, multicast-capable interface.
-    localInterface.s_addr = inet_addr( conf.local_if );
+    localInterface.s_addr = inet_addr( conf.monitor_if );
 
     if (setsockopt( monitor_socket, IPPROTO_IP, IP_MULTICAST_IF, (char *) &localInterface, sizeof(localInterface) ) < 0) {
       perror("setting local interface");
@@ -2394,6 +2403,14 @@ int main(int argc, char **argv)
           printf ( "Config file to read = %s\n", conf_file );
           fflush(stdout);
           break ;
+
+        case 'C':
+          force_cable_delays = TRUE;
+          break;
+
+        case 'G':
+          force_geo_delays = TRUE;
+          break;
 
         default:
           usage("unknown option") ;
