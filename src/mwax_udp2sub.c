@@ -224,7 +224,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <pthread.h>
-#include <stdlib.h>
+#include <stdlib.h> 
 #include <signal.h>
 #include <string.h>
 #include <math.h>
@@ -311,6 +311,7 @@ typedef struct mwa_udp_packet {               // Structure format for the MWA da
 } mwa_udp_packet_t ;
 
 typedef struct udp2sub_monitor {               // Structure for the placing monitorable statistics in shared memory so they can be read by external applications
+    uint16_t u2s_version;                      // App version
     uint8_t udp2sub_id;                        // Which instance number we are.  Probably from 01 to 26, at least initially.
     char hostname[HOSTNAME_LENGTH];            // Host name is looked up to against these strings
     int coarse_chan;                           // Which coarse chan from 01 to 24.
@@ -319,6 +320,7 @@ typedef struct udp2sub_monitor {               // Structure for the placing moni
     int subobs_state;                          // Subobservation state
     int udp_count;                             // Number of UDP packets collected from the NIC for this subobservation
     int udp_dummy;                             // Number of dummy packets we have needed to insert to pad things out for this subobservation
+    int discarded_subobs;                      // Number of subobservations discarded for being too old
 } udp2sub_monitor_t ;
 
     // TODO:
@@ -944,8 +946,11 @@ void *UDP_parse()
               if ( ( sub[ loop ].subobs < start_window ) && ( sub[ loop ].state == 1 ) ) {              // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
                 if ( sub[ loop ].subobs == ( start_window - 8 ) ) {     // then if it's a very recent subobs (which is what we'd expect during normal operations)
                   sub[ loop ].state = 2;                                // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
-                } else {                                                // or if it isn't recent then it's probably because the receivers (or medconv array) went away so...
-                  sub[ loop ].state = 6;                                // set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                } else {                                                // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
+                  if(sub[loop].meta_done != 2) {                        // but we can only do that if we're not currently trying to load its metafits. If not,
+                    sub[ loop ].state = 6;                              // set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                    monitor.discarded_subobs++;
+                  }
                 }
               }
             }
@@ -1005,6 +1010,7 @@ void *UDP_parse()
 
         this_sub->last_udp = UDP_removed_from_buff;                     // This was the last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain there
         this_sub->udp_count++;                                          // Add one to the number of udp packets seen this sub obs.  NB Includes duplicates and faked delay packets so can't reliably be used to check if we're finished a sub
+        monitor.udp_count++;
 
 //---------- We are done with this packet, EXCEPT if this was the very first for an rf_input for a subobs, or the very last, then we want to duplicate them in the adjacent subobs.
 //---------- This is because one packet may contain data that goes in two subobs (or even separate obs!) due to delay tracking
@@ -1750,6 +1756,8 @@ altaz[0].Dist_km
           rfm->delta_delay = (int32_t) lroundl(delta);
           rfm->delta_delta_delay = (int32_t) lroundl(delta_delta);
 
+          meta_result = 4;
+
 //---------- Print out a bunch of debug info ----------
 
           if (debug_mode) {										// Debug logging to screen
@@ -1916,7 +1924,7 @@ void *makesub()
 
       for ( loop = 0 ; loop < 4 ; loop++ ) {                            // Look through all four subobs meta arrays
 
-        if ( sub[loop].state == 2 ) {                                   // If this sub is ready to write out
+        if ( sub[loop].state == 2  && sub[loop].meta_done == 4) {       // If this sub is ready to write out
 
           if ( subobs_ready2write == -1 ) {                             // check if we've already found a different one to write out and if we haven't
 
@@ -2195,6 +2203,7 @@ void *makesub()
                 if ( source_ptr == NULL ) {                                             // but if it never arrived
                   source_ptr = dummy_volt_ptr;                                          // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
                   subm->udp_dummy++;                                                    // The number of dummy packets we needed to insert to pad things out. Make a note for reporting and debug purposes
+                  monitor.udp_dummy++;
                 }
 
                 bytes2copy = ( (source_remain < left_this_line) ? source_remain : left_this_line );             // Get the minimum of the remaining length of the udp volt payload or the length of line left to populate
@@ -2406,10 +2415,14 @@ int main(int argc, char **argv)
 
         case 'C':
           force_cable_delays = TRUE;
+          printf ( "Force enabled cable delays.\n" );
+          fflush(stdout);
           break;
 
         case 'G':
           force_geo_delays = TRUE;
+          printf ( "Force enabled geometric delays.\n" );
+          fflush(stdout);
           break;
 
         default:
