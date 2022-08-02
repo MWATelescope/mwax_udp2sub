@@ -310,18 +310,15 @@ typedef struct mwa_udp_packet {               // Structure format for the MWA da
 
 } mwa_udp_packet_t ;
 
-typedef struct udp2sub_monitor {               // Structure for the placing monitorable statistics in shared memory so they can be read by external applications
-    uint16_t u2s_version;                      // App version
-    uint8_t udp2sub_id;                        // Which instance number we are.  Probably from 01 to 26, at least initially.
-    char hostname[HOSTNAME_LENGTH];            // Host name is looked up to against these strings
-    int coarse_chan;                           // Which coarse chan from 01 to 24.
-    uint64_t sub_write_sleeps;                 // record how often we went to sleep while looking for a sub file to write out (should grow quickly)
-    uint32_t current_subobs;                   // Subobservation in progress
-    int subobs_state;                          // Subobservation state
-    int udp_count;                             // Number of UDP packets collected from the NIC for this subobservation
-    int udp_dummy;                             // Number of dummy packets we have needed to insert to pad things out for this subobservation
-    int discarded_subobs;                      // Number of subobservations discarded for being too old
-} udp2sub_monitor_t ;
+typedef struct udp2sub_monitor {               // Health packet data
+    uint16_t version;                          // U2S build version
+    uint16_t instance;                         // Instance ID
+    uint8_t  coarse_chan;                      // Coarse chan from 01 to 24.
+    char     hostname[HOSTNAME_LENGTH];        // Host name is looked up to against these strings (21 bytes)
+    uint64_t udp_count;                        // Cumulative total UDP packets collected from the NIC
+    uint64_t udp_dummy;                        // Cumulative total dummy packets inserted to pad out subobservations
+    uint32_t discarded_subobs;                 // Cumulative total subobservations discarded for being too old
+} udp2sub_monitor_t;
 
     // TODO:
     // Last sub file created
@@ -538,20 +535,20 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
   size_t sz;
   file = fopen(path, "r");
     if(file == NULL) {
-    fprintf(stderr, "Failed to open %s", path);
+    fprintf(stderr, "Error loading configuration. Unable to open %s\n", path);
     return 1;
   }
   fseek(file, 0, SEEK_END);
   sz = ftell(file);
   rewind(file);
   if(sz == -1) {
-    fprintf(stderr, "Failed to determine file size: %s", path);
+    fprintf(stderr, "Error loading configuration. Failed to determine file size for %s\n", path);
     return 2;
   }
   data = datap = malloc(sz + 1);
   data[sz] = '\n'; // Simplifies parsing slightly
   if(fread(data, 1, sz, file) != sz) {
-    fprintf(stderr, "Failed reading %s - unexpected data length.", path);
+    fprintf(stderr, "Error loading configuration. Read error loading %s\n", path);
     return 3;
   }
   fclose(file);
@@ -663,7 +660,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
     num_instances = load_config_file(file, &available_config);
 
     if(available_config == NULL) {
-      fprintf(stderr, "Failed to load instance configuration data.");
+      fprintf(stderr, "Failed to load instance configuration data.\n");
       exit(1);
     }
 
@@ -684,7 +681,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
 
     monitor.coarse_chan = coarse_chan;
     memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
-    monitor.udp2sub_id = config->udp2sub_id;
+    monitor.instance = config->udp2sub_id;
 }
 
 //===================================================================================================================================================
@@ -1943,7 +1940,6 @@ void *makesub()
 //---------- if we don't have one ----------
 
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
-        monitor.sub_write_sleeps++;
         usleep(20000);                                                  // Chillax for a bit.
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
 
@@ -2320,12 +2316,13 @@ void *heartbeat()
       pthread_exit(NULL);
     }
 
+   monitor.version = BUILD;
+
     while(!terminate) {
       if (sendto( monitor_socket, &monitor, sizeof(monitor), 0, (struct sockaddr *) &addr, sizeof(addr) ) < 0) {
         printf( "\nFailed to send monitor packet" );
         fflush(stdout);
       }
-      monitor.sub_write_sleeps = 0;
       usleep(1000000);
     }
 
