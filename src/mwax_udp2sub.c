@@ -977,6 +977,7 @@ void *UDP_parse()
                 sub[slot_ndx].subobs, sub[slot_ndx].state, sub[slot_ndx].msec_wait, sub[slot_ndx].msec_took, sub[slot_ndx].first_udp, sub[slot_ndx].last_udp, sub[slot_ndx].udp_at_start_write, sub[slot_ndx].udp_at_end_write, sub[slot_ndx].udp_count, sub[slot_ndx].rf_seen );
 
               fflush(stdout);
+              raise(SIGABRT);                                           // For debugging, let's just crash here so we can get a core dump
               terminate = TRUE;                                         // Lets make a fatal error so we know we'll spot it
               continue;                                                 // abort what we're attempting and all go home
             }
