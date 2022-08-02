@@ -5,8 +5,10 @@
 //            LAW Luke Williams luke.a.williams@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 84
-#define THISVER "2.06a"
+#define BUILD 85
+#define THISVER "2.07"
+//
+// 2.07-085     2022-08-02 LAW  Various bugfixes and tidy-up.
 //
 // 2.06a-084    2022-07-26 LAW  Enable heartbeat thread, add monitor interface to config file, CLI options to force cable/geometric delays.
 //
