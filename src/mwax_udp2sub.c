@@ -679,7 +679,7 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
       config->UDPport = 59000 + coarse_chan;                    // Multicast port address is the forced coarse channel number plus an offset of 59000
     }
 
-    monitor.coarse_chan = coarse_chan;
+    monitor.coarse_chan = config->coarse_chan;
     memcpy(monitor.hostname, config->hostname, HOSTNAME_LENGTH);
     monitor.instance = config->udp2sub_id;
 }
