@@ -241,6 +241,8 @@
 
 #include <fitsio.h>
 
+#include "vec3.h"
+
 //---------------- Define our old friends -------------------
 
 #define FALSE 0
@@ -292,6 +294,8 @@
 #define MONITOR_IP "224.0.2.2"
 #define MONITOR_PORT 8007
 #define MONITOR_TTL 3
+
+#define FITS_CHECK(OP) if (status) { fprintf(stderr, "Error in metafits access (%s): ", OP); fits_report_error(stderr, status); status = 0; }
 
 //---------------- MWA external Structure definitions --------------------
 
@@ -1043,9 +1047,23 @@ void *UDP_parse()
     pthread_exit(NULL);
 }
 
+
+long double get_path_difference(long double north, long double east, long double height, long double alt, long double az) {
+  vec3_t A = (vec3_t) { north, east, height };
+  vec3_t B = (vec3_t) { 0, 0, 0 };
+  vec3_t AB = vec3_subtract(B, A);
+  long double ABr = vec3_magnitude(AB);
+  vec3_t ABn = vec3_normalise(AB);
+  vec3_t ACn = vec3_unit(deg2rad(alt), deg2rad(az));
+  long double dot = vec3_dot(ABn, ACn);
+  long double ACr = dot * ABr;
+  return ACr;
+}
+
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // Add metafits info - Every time a new 8 second block of udp packets starts, try to find the metafits data applicable and write it into the subm structure
 //---------------------------------------------------------------------------------------------------------------------------------------------------
+
 
 void add_meta_fits()
 {
@@ -1101,8 +1119,8 @@ void add_meta_fits()
 
 //---------------- Main loop to live in until shutdown -------------------
 
-    printf("add_meta_fits started\n");
-    fflush(stdout);
+    fprintf(stderr, "add_meta_fits started\n");
+    fflush(stderr);
 
     clock_gettime( CLOCK_REALTIME, &ended_meta_write_time);             // Fake the ending time for the last metafits file ('cos like there wasn't one y'know but the logging will expect something)
 
@@ -1382,11 +1400,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
             if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;				// Don't allow more inputs than MAX_INPUTS (probably die reading the tile list anyway)
 
             fits_read_key( fptr, TLONGLONG, "UNIXTIME", &(subm->UNIXTIME), NULL, &status );
-            if (status) {
-              printf ( "Failed to read UNIXTIME\n" );
-              fflush(stdout);
-            }
-
+            FITS_CHECK("read_key UNIXTIME");
 //---------- We now have everything we need from the 1st HDU ----------
 
             int hdutype=0;
@@ -1411,11 +1425,13 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
             fits_movrel_hdu( fptr, 1 , &hdutype, &status );                             // Shift to the next HDU, where the antenna table is
             if (status) {
-              printf ( "Failed to move to 2nd HDU\n" );
-              fflush(stdout);
+              FITS_CHECK("Move to 2nd HDU");
+              //fprintf (stderr, "Failed to move to 2nd HDU\n" );
+              //fflush(stderr);
             }
 
             fits_get_num_rows( fptr, &nrows, &status );
+            FITS_CHECK("get_num_rows 2nd HDU");
             if ( nrows != subm->NINPUTS ) {
               printf ( "NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, nrows );
             }
@@ -1425,9 +1441,11 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 //        nullval = -99.;
 
         fits_get_colnum( fptr, CASEINSEN, "Antenna", &colnum, &status );
+        FITS_CHECK("get_colnum Antenna");
         fits_read_col( fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status );
 
         fits_get_colnum( fptr, CASEINSEN, "Pol", &colnum, &status );
+        FITS_CHECK("get_colnum Pol");
         fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
 
         for (int loop = 0; loop < nrows; loop++) {
@@ -1537,18 +1555,21 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 //---------- Read and write the 'Flavors' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Flavors", &colnum, &status );
+        FITS_CHECK("get_colnum FLAVORS");
         fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
         for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Flavors, cfitsio_str_ptr[loop] );
 
 //---------- Read and write the 'Calib_Delay' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Calib_Delay", &colnum, &status );
+        FITS_CHECK("get_colnum CALIB_DELAY");
         fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
         for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Calib_Delay = cfitsio_floats[loop];           // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
 //---------- Read and write the 'Calib_Gains' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Calib_Gains", &colnum, &status );
+        FITS_CHECK("get_colnum CALIB_GAINS");
         // Like 'Gains' and 'Delays, this is an array. This time of floats.
         for (int loop = 0; loop < nrows; loop++) {
           fits_read_col( fptr, TFLOAT, colnum, loop+1, felem, 24, 0, subm->rf_inp[ metafits2sub_order[loop] ].Calib_Gains, &anynulls, &status );
@@ -1559,12 +1580,11 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 //           Note the indent change caused by moving code around. Maybe I'll fix that later... Maybe not.
 
             fits_movrel_hdu( fptr, 1 , &hdutype, &status );                             // Shift to the next HDU, where the AltAz table is
-            if (status) {
-              printf ( "Failed to move to 3rd HDU\n" );
-              fflush(stdout);
-            }
+            FITS_CHECK("Move to 3nd HDU");
+
 
             fits_get_num_rows( fptr, &ntimes, &status );				// How many rows (times) are written to the metafits?
+            fprintf(stderr, "ntimes=%ld\n", ntimes);
 
             // They *should* start at GPSTIME and have an entry every 4 seconds for EXPOSURE seconds, inclusive of the beginning and end.  ie 3 times for 8 seconds exposure @0sec, @4sec & @8sec
             // So the number of them should be '(subm->EXPOSURE >> 2) + 1'
@@ -1573,7 +1593,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
             if ( ( subm->GEODEL == 1 ) ||												// If we have been specifically asked for zenith pointings *or*
               ( (((subm->subobs - subm->GPSTIME) >>2)+3) > ntimes ) ) {									// if we want times which are past the end of the list available in the metafits
-
+              fprintf(stderr, "Not gonna do delay tracking!! GEODEL=%d subobs=%d GPSTIME=%lld ntimes=%ld\n", subm->GEODEL, subm->subobs, subm->GPSTIME, ntimes);
               for (int loop = 0; loop < 3; loop++) {											// then we need to put some default values in (ie between observations)
                 subm->altaz[ loop ].gpstime = ( subm->subobs + loop * 4 );								// populate the true gps times for the beginning, middle and end of this *sub*observation
                 subm->altaz[ loop ].Alt = 90.0;												// Point straight up (in degrees above horizon)
@@ -1646,7 +1666,10 @@ altaz[0].Dist_km
           if (status == END_OF_FILE)  status = 0;                                                       // Reset after normal error
 
           fits_close_file(fptr, &status);
-          if (status) fits_report_error(stderr, status);                                                // print any error message
+          if (status) {
+            fprintf(stderr, "Error when closing metafits file: ");
+            fits_report_error(stderr, status);                                                // print any error message
+          }
 
         }			// End of 'go for meta' metafile reading
 
@@ -1683,18 +1706,22 @@ altaz[0].Dist_km
 //---------- Do Geometric delays ----------
 
           if ( subm->GEODEL >= 1 ){										// GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+            delay_so_far_start_mm  -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
+            delay_so_far_middle_mm -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
+            delay_so_far_end_mm    -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
+            
 
-            delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
-                                        ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
-                                        ( rfm->Height * subm->altaz[ 0 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
-
-            delay_so_far_middle_mm -= ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
-                                        ( rfm->East * subm->altaz[ 1 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
-                                        ( rfm->Height * subm->altaz[ 1 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
-
-            delay_so_far_end_mm -=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
-                                        ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
-                                        ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+            //delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            //                            ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+            //                            ( rfm->Height * subm->altaz[ 0 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+//
+            //delay_so_far_middle_mm -= ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            //                            ( rfm->East * subm->altaz[ 1 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+            //                            ( rfm->Height * subm->altaz[ 1 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
+//
+            //delay_so_far_end_mm -=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
+            //                            ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
+            //                            ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
           }
 
 //---------- Do Calibration delays ----------
@@ -1706,7 +1733,7 @@ altaz[0].Dist_km
           long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;					// Convert start delay into samples at the coarse channel sample rate
           long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;					// Convert middle delay into samples at the coarse channel sample rate
           long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;					// Convert end delay into samples at the coarse channel sample rate
-
+          fprintf(stderr, "start: %Lf, middle: %Lf, end: %Lf, ",  start_sub_s, middle_sub_s, end_sub_s);
 //---------- Commit to a whole sample delay and calculate the residuals --------
 
           long double whole_sample_delay = roundl( middle_sub_s );						// Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
@@ -1728,7 +1755,7 @@ altaz[0].Dist_km
           a = ( start_sub_s - middle_sub_s - middle_sub_s + end_sub_s ) * two_over_num_blocks_sqrd ;                                                          // a = (s+e-2*m)/(n*n/2)
           b = ( middle_sub_s + middle_sub_s + middle_sub_s + middle_sub_s - start_sub_s - start_sub_s - start_sub_s - end_sub_s ) * one_over_num_blocks;      // b = (4*m-3*s-e)/(n)
           c = start_sub_s ;                                                                                                                                   // c = s
-
+          fprintf(stderr, "a: %Lf, b: %Lf, c: %Lf, ",  a, b, c);
 //      residual delays can now be interpolated for any time using 'ax^2 + bx + c' where x is the time
 
 //---------- We'll be calulating each value in turn so we're better off passing back in a form only needing 2 additions per data point.
@@ -1738,14 +1765,14 @@ altaz[0].Dist_km
           long double initial = a * 0.25L + b * 0.5L + c;							// ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
           long double delta = a + a + b;									// That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
           long double delta_delta = a + a;									// ie 2a because it's the 2nd derivative
-
+          fprintf(stderr, "initial: %Lf, delta: %Lf, delta_delta: %Lf, ",  initial, delta, delta_delta);
 //---------- int32 maths would be fine for this and very fast provided we scaled the values into range ----------
 //      We want to calcluate in millisamples, and we want to use most of the bits in the int32, so multiply by '1000 x 2^20'
 
           initial *= conv2int32;
           delta *= conv2int32;
           delta_delta *= conv2int32;
-
+          fprintf(stderr, "initial: %Lf, delta: %Lf, delta_delta: %Lf, ",  initial, delta, delta_delta);
 //---------- Now convert these long double floats to ints ----------
 
           rfm->ws_delay = (int16_t) whole_sample_delay;				// whole_sample_delay has already been roundl(ed) somewhere above here
@@ -1755,7 +1782,7 @@ altaz[0].Dist_km
                                                                                 // addition rounding errors.
           rfm->delta_delay = (int32_t) lroundl(delta);
           rfm->delta_delta_delay = (int32_t) lroundl(delta_delta);
-
+          fprintf(stderr, "ws: %d, initial: %d, delta: %d, delta_delta: %d, shifted_initial: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->initial_delay >> 20);
           meta_result = 4;
 
 //---------- Print out a bunch of debug info ----------
@@ -1825,6 +1852,11 @@ altaz[0].Dist_km
       }				// End of 'if there is a metafits to read' (actually an 'else' off 'is there nothing to do')
     }				// End of huge 'while !terminate' loop
 }				// End of function
+void *add_meta_fits_thread() {
+  add_meta_fits();
+  pthread_exit(NULL);
+}
+
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // makesub - Every time an 8 second block of udp packets is available, try to generate a sub files for the correlator
@@ -2372,6 +2404,110 @@ void usage(char *err)                           // Bad command line.  Report the
     fflush(stdout);
 }
 
+/** Generate delay tracking data for validation purposes.
+ * 
+ * This function sets up the global state to appear as though a single subobservation for which we
+ * have a metafits file is ready to have its metadata populated, without running any of the worker
+ * threads. We then start the add_meta_fits() thread and wait for it to load the supplied metafits
+ * file and calculate the delay tracking values that would be applied if this were a real
+ * subobservation. When this has completed we terminate the thread and write the delay table to
+ * standard output.
+ */
+int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
+  fprintf(stderr, "entering delay generator mode\n");
+  
+  subobs_udp_meta_t *subm = &sub[0];
+  uint32_t subobs_start = obs_id + subobs_idx * 8;
+  sub[0].state = 1;
+  sub[0].meta_done = 0;
+  sub[0].subobs = subobs_start & ~7;
+
+  fprintf(stderr, "obs ID: %d\n", obs_id);
+  fprintf(stderr, "subobs ID: %d\n", sub[0].subobs);
+
+  struct timespec time_start;
+  struct timespec time_now;
+  BOOL reader_done = FALSE;
+  BOOL reader_success = FALSE;
+  clock_gettime( CLOCK_REALTIME, &time_start);
+  clock_gettime( CLOCK_REALTIME, &time_now);
+  pthread_t reader_thread;
+  pthread_create(&reader_thread,NULL,add_meta_fits_thread,NULL);
+  while(!reader_done && time_now.tv_sec - time_start.tv_sec < 5) {
+    clock_gettime( CLOCK_REALTIME, &time_now);
+    if(sub[0].meta_done == 4) {
+      fprintf(stderr, "metadata loaded successfully.\n");
+      reader_done = TRUE;
+      reader_success = TRUE;
+    } else if(sub[0].meta_done == 5){
+      fprintf(stderr, "error loading metadata.\n");
+      reader_done = TRUE;
+      reader_success = FALSE;
+    }
+  }
+  terminate = TRUE;
+  pthread_join(reader_thread,NULL);
+  fprintf(stderr, "reader thread joined.\n");
+  if(!reader_done) {
+    fprintf(stderr, "timed out waiting for metadata.\n");
+  }
+
+  fprintf(stderr, "NINPUTS %d\n", sub[0].NINPUTS);
+  altaz_meta_t *altaz = subm->altaz;
+  for(int i=0; i<3; i++)
+    fprintf(stderr, "AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %llf, SinAzCosAlt: %llf, CosAzCosAlt: %llf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
+  fflush(stderr);
+
+  tile_meta_t *rfm;
+  block_0_tile_metadata_t block_0_working;
+  int MandC_rf;
+  int ninputs_pad = sub[0].NINPUTS;
+  int32_t w_initial_delay;
+  int32_t w_delta_delay;
+
+  /// Copied and pasted from `makesub`:
+          for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
+
+            rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
+
+            block_0_working.rf_input = rfm->rf_input;				// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
+            block_0_working.ws_delay = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+
+            w_initial_delay = rfm->initial_delay;				// Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
+            w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
+
+            block_0_working.initial_delay = w_initial_delay;			// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
+            block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
+            block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
+            block_0_working.num_pointings = 1;					// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
+
+            for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {		// populate the fractional delay lookup table for this tile (one for each 5ms)
+              block_0_working.frac_delay[ loop ] = (w_initial_delay >> 20);	// Rounding and everything was all included when we did the original maths in the other thread
+              w_initial_delay += w_delta_delay;					// update our *TEMP* copies as we cycle through
+              w_delta_delay += block_0_working.delta_delta_delay;		// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
+            }
+
+            //dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
+            printf("%d,%d,%d,%d,%d,%d,", rfm->Tile, rfm->rf_input, rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
+            for ( int loop = 0; loop < POINTINGS_PER_SUB-1; loop++ ) {
+              printf("%d,", block_0_working.frac_delay[loop]);
+            }
+            printf("%d\n", block_0_working.frac_delay[POINTINGS_PER_SUB-1]);
+            memset(&block_0_working, 0, sizeof(block_0_tile_metadata_t));
+          }
+
+
+  //for(int i=0; i<sub[0].NINPUTS; i++) {
+   // rfm = &sub[0].rf_inp[i];
+    
+ // }
+  //printf("%d", rfm->
+  fflush(stdout);
+
+  fprintf(stderr, "\ndone.\n");
+  return 0;
+}
+
 // ------------------------ Start of world -------------------------
 
 int main(int argc, char **argv)
@@ -2383,6 +2519,10 @@ int main(int argc, char **argv)
     int instance = 0;                                           // Assume we're the first (or only) instance on this server
     int chan_override = 0;                                      // Assume we are going to use the default coarse channel for this instance
     char *conf_file = "/vulcan/mwax_config/mwax_u2s.cfg";       // Default configuration path
+
+    uint32_t delaygen_obs_id = 0;     // Observation ID for delay generator
+    uint32_t delaygen_subobs_idx = 0; // The n-th subobservation
+    BOOL delaygen_enable = FALSE;
 
     while (argc > 1 && argv[1][0] == '-') {
       switch (argv[1][1]) {
@@ -2409,20 +2549,42 @@ int main(int argc, char **argv)
           ++argv ;
           --argc ;
           conf_file = argv[1];
-          printf ( "Config file to read = %s\n", conf_file );
-          fflush(stdout);
+          fprintf (stderr, "Config file to read = %s\n", conf_file );
+          fflush(stderr);
           break ;
 
         case 'C':
           force_cable_delays = TRUE;
-          printf ( "Force enabled cable delays.\n" );
-          fflush(stdout);
+          fprintf (stderr, "Force enabled cable delays.\n" );
+          fflush(stderr);
           break;
 
         case 'G':
           force_geo_delays = TRUE;
-          printf ( "Force enabled geometric delays.\n" );
-          fflush(stdout);
+          fprintf(stderr, "Force enabled geometric delays.\n" );
+          fflush(stderr);
+          break;
+
+        case 'g':
+          delaygen_enable = TRUE;
+          fprintf (stderr, "Delay generator mode enabled. u2s will quit after generating delay data.\n" );
+          fflush(stderr);
+          break;
+
+        case 'o':
+          ++argv ;
+          --argc ;
+          delaygen_obs_id = atoi(argv[1]);
+          fprintf(stderr, "Using observation %d for delay generator.\n", delaygen_obs_id);
+          fflush(stderr);
+          break;
+
+        case 's':
+          ++argv ;
+          --argc ;
+          delaygen_subobs_idx = atoi(argv[1]);
+          fprintf(stderr, "Using subobservation index %d for delay generator.\n", delaygen_subobs_idx);
+          fflush(stderr);
           break;
 
         default:
@@ -2444,13 +2606,13 @@ int main(int argc, char **argv)
     char hostname[300];                                 // Long enough to fit a 255 host name.  Probably it will only be short, but -hey- it's just a few bytes
 
     if ( gethostname( hostname, sizeof hostname ) == -1 ) strcpy( hostname, "unknown" );        // Get the hostname or default to unknown if we fail
-    printf("Running udp2sub on %s.  ver " THISVER " Build %d\n", hostname, prog_build);
+    fprintf(stderr, "Running udp2sub on %s.  ver " THISVER " Build %d\n", hostname, prog_build);
     fflush(stdout);
 
     read_config( conf_file, hostname, instance, chan_override, &conf );         // Use the config file, the host name and the instance number (if there is one) to look up all our configuration and settings
 
     if ( conf.udp2sub_id == 0 ) {                                       // If the lookup returned an id of 0, we don't have enough information to continue
-      printf("Hostname not found in configuration\n");
+      fprintf(stderr, "Hostname not found in configuration\n");
       fflush(stdout);
       exit(EXIT_FAILURE);                                               // Abort!
     }
@@ -2468,6 +2630,11 @@ int main(int argc, char **argv)
 //---------------- Allocate the RAM we need for the incoming udp buffer and initialise it ------------------------
 
     UDP_num_slots = conf.UDP_num_slots;                                 // We moved this to a config variable, but most of the code still assumes the old name so make both names valid
+
+    // In delay geneator mode, we don't really need to buffer any packets, but we'll let the structures be populated
+    if(delaygen_enable == TRUE) {
+      UDP_num_slots = 10;
+    }
 
     msgvecs = calloc( 2 * UDP_num_slots, sizeof(struct mmsghdr) );      // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
     if ( msgvecs == NULL ) {                                            // If that failed
@@ -2527,9 +2694,15 @@ int main(int argc, char **argv)
       exit(EXIT_FAILURE);                                               // and give up!
     }
 
+    // Enter delay generator if enabled, then quit
+    if(delaygen_enable == TRUE) {
+      return delaygen(delaygen_obs_id, delaygen_subobs_idx);
+    }
+
+
 //---------------- We're ready to fire up the four worker threads now ------------------------
 
-    printf("Firing up pthreads\n");
+    fprintf(stderr, "Firing up pthreads\n");
     fflush(stdout);
 
     pthread_t UDP_recv_pt;
