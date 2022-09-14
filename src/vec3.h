@@ -12,10 +12,10 @@ typedef struct vec3 {
   long double z;
 } vec3_t;
 
-#define deg2rad(x) (x * M_PI / 180)
+#define deg2rad(x) (x * M_PI / 180L)
 
 inline long double vec3_magnitude(vec3_t v) {
-  return sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+  return sqrtl(v.x*v.x + v.y*v.y + v.z*v.z);
 }
 
 inline vec3_t vec3_add(vec3_t a, vec3_t b) {
@@ -31,7 +31,7 @@ inline vec3_t vec3_scale(long double k, vec3_t v) {
 }
 
 inline vec3_t vec3_normalise(vec3_t v) {
-  return vec3_scale(1 / vec3_magnitude(v), v);
+  return vec3_scale(1L / vec3_magnitude(v), v);
 }
 
 inline long double vec3_dot(vec3_t a, vec3_t b) {

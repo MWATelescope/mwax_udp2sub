@@ -297,6 +297,7 @@
 
 #define FITS_CHECK(OP) if (status) { fprintf(stderr, "Error in metafits access (%s): ", OP); fits_report_error(stderr, status); status = 0; }
 
+
 //---------------- MWA external Structure definitions --------------------
 
 #pragma pack(push,1)                          // We're writing this header into all our packets, so we want/need to force the compiler not to add it's own idea of structure padding
@@ -1636,14 +1637,14 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
               //---------- Now calculate the East/North/Height conversion factors for the three times --------
 
-              for (int loop = 0; loop < 3; loop++) {
-                sincosl( d2r * (long double) subm->altaz[ loop ].Alt, &SinAlt, &CosAlt );						// Calculate the Sin and Cos of Alt in one operation.
-                sincosl( d2r * (long double) subm->altaz[ loop ].Az,  &SinAz,  &CosAz  );						// Calculate the Sin and Cos of Az in one operation.
-
-                subm->altaz[ loop ].SinAzCosAlt = SinAz * CosAlt;									// this conversion factor will be multiplied by tile East
-                subm->altaz[ loop ].CosAzCosAlt = CosAz * CosAlt;									// this conversion factor will be multiplied by tile North
-                subm->altaz[ loop ].SinAlt = SinAlt;											// this conversion factor will be multiplied by tile Height
-              }
+              //for (int loop = 0; loop < 3; loop++) {
+              //  sincosl( d2r * (long double) subm->altaz[ loop ].Alt, &SinAlt, &CosAlt );						// Calculate the Sin and Cos of Alt in one operation.
+              //  sincosl( d2r * (long double) subm->altaz[ loop ].Az,  &SinAz,  &CosAz  );						// Calculate the Sin and Cos of Az in one operation.
+//
+              //  subm->altaz[ loop ].SinAzCosAlt = SinAz * CosAlt;									// this conversion factor will be multiplied by tile East
+              //  subm->altaz[ loop ].CosAzCosAlt = CosAz * CosAlt;									// this conversion factor will be multiplied by tile North
+              //  subm->altaz[ loop ].SinAlt = SinAlt;											// this conversion factor will be multiplied by tile Height
+              //}
 
             }
 
@@ -1706,9 +1707,9 @@ altaz[0].Dist_km
 //---------- Do Geometric delays ----------
 
           if ( subm->GEODEL >= 1 ){										// GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
-            delay_so_far_start_mm  -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
-            delay_so_far_middle_mm -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
-            delay_so_far_end_mm    -= get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
+            delay_so_far_start_mm  += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
+            delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
+            delay_so_far_end_mm    += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
             
 
             //delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
