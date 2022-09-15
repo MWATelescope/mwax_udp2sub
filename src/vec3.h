@@ -12,7 +12,7 @@ typedef struct vec3 {
   long double z;
 } vec3_t;
 
-#define deg2rad(x) (x * M_PI / 180L)
+#define deg2rad(x) (x * M_PIl / 180L)
 
 inline long double vec3_magnitude(vec3_t v) {
   return sqrtl(v.x*v.x + v.y*v.y + v.z*v.z);
@@ -38,7 +38,7 @@ inline long double vec3_dot(vec3_t a, vec3_t b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-inline vec3_t vec3_unit(long double a, long double b) {
+inline vec3_t vec3_unit(long double b, long double a) {
   return (vec3_t) { cosl(a)*cosl(b),  sinl(a)*cosl(b), sinl(b) };
 }
 

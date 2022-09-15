@@ -1637,14 +1637,14 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
               //---------- Now calculate the East/North/Height conversion factors for the three times --------
 
-              //for (int loop = 0; loop < 3; loop++) {
-              //  sincosl( d2r * (long double) subm->altaz[ loop ].Alt, &SinAlt, &CosAlt );						// Calculate the Sin and Cos of Alt in one operation.
-              //  sincosl( d2r * (long double) subm->altaz[ loop ].Az,  &SinAz,  &CosAz  );						// Calculate the Sin and Cos of Az in one operation.
+              for (int loop = 0; loop < 3; loop++) {
+                sincosl( d2r * (long double) subm->altaz[ loop ].Alt, &SinAlt, &CosAlt );						// Calculate the Sin and Cos of Alt in one operation.
+                sincosl( d2r * (long double) subm->altaz[ loop ].Az,  &SinAz,  &CosAz  );						// Calculate the Sin and Cos of Az in one operation.
 //
-              //  subm->altaz[ loop ].SinAzCosAlt = SinAz * CosAlt;									// this conversion factor will be multiplied by tile East
-              //  subm->altaz[ loop ].CosAzCosAlt = CosAz * CosAlt;									// this conversion factor will be multiplied by tile North
-              //  subm->altaz[ loop ].SinAlt = SinAlt;											// this conversion factor will be multiplied by tile Height
-              //}
+                subm->altaz[ loop ].SinAzCosAlt = SinAz * CosAlt;									// this conversion factor will be multiplied by tile East
+                subm->altaz[ loop ].CosAzCosAlt = CosAz * CosAlt;									// this conversion factor will be multiplied by tile North
+                subm->altaz[ loop ].SinAlt = SinAlt;											// this conversion factor will be multiplied by tile Height
+              }
 
             }
 
@@ -1710,21 +1710,23 @@ altaz[0].Dist_km
             delay_so_far_start_mm  += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
             delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
             delay_so_far_end_mm    += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
-            
+            fprintf(stderr, "dels: %Lf, delm: %Lf, del: %Lf, ",  get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az)
+            ,  get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az), 
+            get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az));
 
             //delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
             //                            ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
             //                            ( rfm->Height * subm->altaz[ 0 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
-//
+////
             //delay_so_far_middle_mm -= ( ( rfm->North * subm->altaz[ 1 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
             //                            ( rfm->East * subm->altaz[ 1 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
             //                            ( rfm->Height * subm->altaz[ 1 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
-//
+////
             //delay_so_far_end_mm -=    ( ( rfm->North * subm->altaz[ 2 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
             //                            ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
             //                            ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
           }
-
+          fprintf(stderr, "north: %Lf, east: %Lf, height: %Lf, ",  rfm->North, rfm->East, rfm->Height);
 //---------- Do Calibration delays ----------
 //	WIP.  Calibration delays are just a dream right now
 
@@ -1750,7 +1752,7 @@ altaz[0].Dist_km
             printf( "residual delays out of bounds!\n" );
           }
 
-//---------- Now treat the start, middle & end residuals as points on a parabola at x=0, x=800, x=1600 ----------
+//---------- Now treat the start, middle & end  residuals as points on a parabola at x=0, x=800, x=1600 ----------
 //      Calculate a, b & c of this parabola in the form: delay = ax^2 + bx + c where x is the (tenth of a) block number
 
           a = ( start_sub_s - middle_sub_s - middle_sub_s + end_sub_s ) * two_over_num_blocks_sqrd ;                                                          // a = (s+e-2*m)/(n*n/2)
@@ -1906,11 +1908,9 @@ void *makesub()
     mwa_udp_packet_t dummy_udp={0};                                     // Make a dummy udp packet full of zeros and NULLs.  We'll use this to stand in for every missing packet!
     void *dummy_volt_ptr = &dummy_udp.volts[0];                         // and we'll remember where we can find UDP_PAYLOAD_SIZE (4096LL) worth of zeros
     UINT8 *dummy_map; /* = calloc(active_rf_inputs*UDP_PER_RF_PER_SUB/8, 1); */ // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
-
+    
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
     tile_meta_t *rfm;							// Pointer to the tile metadata for the tile I'm working on
-  
-
     
     int block;                                                          // loop variable
     int MandC_rf;                                                       // loop variable
@@ -2194,10 +2194,11 @@ void *makesub()
           dest = block1_add;							// And set our write pointer to the beginning of block 1
 
 //---------- Write out the dummy map ----------
-
-//	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%lld)\n", 
+          uint32_t dummy_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
+//	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%ld)\n", 
 //	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
-//	 		  ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8);
+//	 		  dummy_map_len);
+          
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
             uint16_t row = subm->rf2ndx[rfm->rf_input];
@@ -2214,6 +2215,28 @@ void *makesub()
               dummy_map[(MandC_rf * (UDP_PER_RF_PER_SUB-2) + t)/ 8] = bitmap;
             }
           }
+
+//---------- Write out the volt data for the "margin packets" of every RF source to block 0. ----------
+/* We need two packet's worth at each end to be able to undo delays, because if we shift out samples
+ * at the start of a block, we won't be able to later find them in the very first packet, they were
+ * only ever stored in the second - but we still need that first packet in case we later want to shift
+ * in samples, going the other way.
+ */
+          uint32_t block0_margin_len = 0;
+          uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
+          uint8_t *block0_margin_start = block0_margin_dst;
+          bytes2copy = UDP_PAYLOAD_SIZE * 2;
+          for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
+            my_MandC = &my_MandC_meta[MandC_rf];
+            source_ptr = subm->udp_volts[my_MandC->seen_order][0];
+            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-3];
+            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+            block0_margin_len += bytes2copy * 2;
+          }
+          fprintf(stderr, "UDP margin packets at 0x%08llx (len=%ld)\n", 
+	 		      (UINT64) block0_margin_start - (UINT64) ext_shm_buf, 
+	    		  block0_margin_len);
 
 //---------- Write out the voltage data blocks ----------
 
