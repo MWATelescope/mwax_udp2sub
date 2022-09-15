@@ -2234,7 +2234,7 @@ void *makesub()
             block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
             block0_margin_len += bytes2copy * 2;
           }
-          fprintf(stderr, "UDP margin packets at 0x%08llx (len=%ld)\n", 
+          fprintf(stderr, "UDP margin packets at 0x%08llx (len=%d)\n", 
 	 		      (UINT64) block0_margin_start - (UINT64) ext_shm_buf, 
 	    		  block0_margin_len);
 
@@ -2452,7 +2452,7 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   struct timespec time_start;
   struct timespec time_now;
   BOOL reader_done = FALSE;
-  BOOL reader_success = FALSE;
+  //BOOL reader_success = FALSE;
   clock_gettime( CLOCK_REALTIME, &time_start);
   clock_gettime( CLOCK_REALTIME, &time_now);
   pthread_t reader_thread;
@@ -2462,11 +2462,11 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
     if(sub[0].meta_done == 4) {
       fprintf(stderr, "metadata loaded successfully.\n");
       reader_done = TRUE;
-      reader_success = TRUE;
+      //reader_success = TRUE;
     } else if(sub[0].meta_done == 5){
       fprintf(stderr, "error loading metadata.\n");
       reader_done = TRUE;
-      reader_success = FALSE;
+      //reader_success = FALSE;
     }
   }
   terminate = TRUE;
@@ -2479,7 +2479,7 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   fprintf(stderr, "NINPUTS %d\n", sub[0].NINPUTS);
   altaz_meta_t *altaz = subm->altaz;
   for(int i=0; i<3; i++)
-    fprintf(stderr, "AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %llf, SinAzCosAlt: %llf, CosAzCosAlt: %llf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
+    fprintf(stderr, "AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %Lf, SinAzCosAlt: %Lf, CosAzCosAlt: %Lf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
   fflush(stderr);
 
   tile_meta_t *rfm;
