@@ -2225,16 +2225,27 @@ void *makesub()
           uint32_t block0_margin_len = 0;
           uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
           uint8_t *block0_margin_start = block0_margin_dst;
-          bytes2copy = UDP_PAYLOAD_SIZE * 2;
+          bytes2copy = UDP_PAYLOAD_SIZE;
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
+
             source_ptr = subm->udp_volts[my_MandC->seen_order][0];
             if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
             block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
-            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-3];
+
+            source_ptr = subm->udp_volts[my_MandC->seen_order][1];
             if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
             block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
-            block0_margin_len += bytes2copy * 2;
+
+            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-2];
+            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
+            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+
+            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-1];
+            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
+            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+
+            block0_margin_len += bytes2copy * 4;
           }
           fprintf(stdout, "UDP margin packets at 0x%08llx (len=%d)\n", 
 	 		      (UINT64) block0_margin_start - (UINT64) ext_shm_buf, 
