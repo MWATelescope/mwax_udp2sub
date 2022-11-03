@@ -234,6 +234,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <float.h>
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -296,7 +297,11 @@
 #define MONITOR_TTL 3
 
 #define FITS_CHECK(OP) if (status) { fprintf(stderr, "Error in metafits access (%s): ", OP); fits_report_error(stderr, status); status = 0; }
-
+#ifdef DEBUG
+#define DEBUG_LOG(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define DEBUG_LOG(...)
+#endif
 
 //---------------- MWA external Structure definitions --------------------
 
@@ -385,13 +390,16 @@ typedef struct tile_meta {                              // Structure format for 
     uint16_t rf_input;                                  // What's the tile & pol identifier we'll see in the udp packets for this input?
 
     int16_t ws_delay;					// The whole sample delay IN SAMPLES (NOT BYTES). Can be -ve. Each extra delay will move the starting position later in the sample sequence
-    int32_t initial_delay;
-    int32_t delta_delay;
-    int32_t delta_delta_delay;
+    double initial_delay;
+    double delta_delay;
+    double delta_delta_delay;
+    double start_total_delay;
+    double middle_total_delay;
+    double end_total_delay;
 
 } tile_meta_t;
 
-typedef struct block_0_tile_metadata {			// Structure format for the metadata line for each tile stored in the first block of the sub file.
+/*typedef struct block_0_tile_metadata {			// Structure format for the metadata line for each tile stored in the first block of the sub file.
 
     uint16_t rf_input;                                  // What's the tile & pol identifier we'll see in the udp packets for this input?
 
@@ -403,7 +411,33 @@ typedef struct block_0_tile_metadata {			// Structure format for the metadata li
     int16_t num_pointings;				// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
     int16_t frac_delay[POINTINGS_PER_SUB];		// 1601 Fractional delays in units of 1000th of a whole sample time.  Not supposed to be out of range of -2000 to 2000 millisamples (inclusive).
 
-} block_0_tile_metadata_t;
+} block_0_tile_metadata_t;*/
+
+//typedef struct delay_table_entry {			// Structure format for the metadata line for each tile stored in the first block of the sub file.
+//    uint16_t rf_input;                  // What's the tile & pol identifier we'll see in the udp packets for this input?
+//    int16_t ws_delay;				          	// The whole sample delay for this tile, for this subobservation?  Will often be negative!
+//    int32_t initial_delay;
+//    int32_t delta_delay;
+//    int32_t delta_delta_delay;
+//
+//    int16_t num_pointings;			            	// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
+//    int32_t frac_delay[POINTINGS_PER_SUB];		// 1601 Fractional delays in units of a millionth of a whole sample time.  Not supposed to be out of range of -2000 to 2000 millisamples (inclusive).
+//} delay_table_entry_t;
+
+// structure for each signal path
+typedef struct delay_table_entry {
+    uint16_t rf_input;
+    int16_t ws_delay_applied;      // The whole-sample delay for this signal path, for the entire sub-observation.  Will often be negative.
+    double start_total_delay;
+    double middle_total_delay;
+    double end_total_delay;
+    double initial_delay;          // Initial residual delay at centre of first 5 ms timestep
+    double delta_delay;            // Increment between timesteps
+    double delta_delta_delay;      // Increment in the increment between timesteps
+    int16_t num_pointings;         // Initially 1 but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
+    int16_t reserved;
+    float frac_delay[POINTINGS_PER_SUB];        // 1600 fractional delays in fractions of a whole sample time.  Not supposed to be out of range of -1 to 1 samples (inclusive).
+} delay_table_entry_t;
 
 typedef struct subobs_udp_meta {                        // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets
 
@@ -1053,11 +1087,8 @@ long double get_path_difference(long double north, long double east, long double
   vec3_t A = (vec3_t) { north, east, height };
   vec3_t B = (vec3_t) { 0, 0, 0 };
   vec3_t AB = vec3_subtract(B, A);
-  long double ABr = vec3_magnitude(AB);
-  vec3_t ABn = vec3_normalise(AB);
   vec3_t ACn = vec3_unit(deg2rad(alt), deg2rad(az));
-  long double dot = vec3_dot(ABn, ACn);
-  long double ACr = dot * ABr;
+  long double ACr = vec3_dot(AB, ACn);
   return ACr;
 }
 
@@ -1094,7 +1125,7 @@ void add_meta_fits()
 //    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
     static long double one_over_num_blocks = ( ((long double) 1L) / (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) );      // Frequently used during fitting parabola
 
-    static long double conv2int32 = (long double)( 1 << 20 ) * (long double) 1000L;                     // Frequently used conversion factor to millisamples and making use of extra bits in int32
+    static long double conv2int32 = (long double)( 1 << 10 ) * (long double) 1000000L;                     // Frequently used conversion factor to microsamples and making use of extra bits in int32
     static long double res_max = (long double) 2L;                                                      // Frequently used in range checking. Largest allowed residual.
     static long double res_min = (long double) -2L;                                                     // Frequently used in range checking. Smallest allowed residual.
 
@@ -1427,8 +1458,6 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
             fits_movrel_hdu( fptr, 1 , &hdutype, &status );                             // Shift to the next HDU, where the antenna table is
             if (status) {
               FITS_CHECK("Move to 2nd HDU");
-              //fprintf (stderr, "Failed to move to 2nd HDU\n" );
-              //fflush(stderr);
             }
 
             fits_get_num_rows( fptr, &nrows, &status );
@@ -1585,7 +1614,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
 
             fits_get_num_rows( fptr, &ntimes, &status );				// How many rows (times) are written to the metafits?
-            fprintf(stderr, "ntimes=%ld\n", ntimes);
+            DEBUG_LOG("ntimes=%ld\n", ntimes);
 
             // They *should* start at GPSTIME and have an entry every 4 seconds for EXPOSURE seconds, inclusive of the beginning and end.  ie 3 times for 8 seconds exposure @0sec, @4sec & @8sec
             // So the number of them should be '(subm->EXPOSURE >> 2) + 1'
@@ -1594,7 +1623,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
             if ( ( subm->GEODEL == 1 ) ||												// If we have been specifically asked for zenith pointings *or*
               ( (((subm->subobs - subm->GPSTIME) >>2)+3) > ntimes ) ) {									// if we want times which are past the end of the list available in the metafits
-              fprintf(stderr, "Not gonna do delay tracking!! GEODEL=%d subobs=%d GPSTIME=%lld ntimes=%ld\n", subm->GEODEL, subm->subobs, subm->GPSTIME, ntimes);
+              DEBUG_LOG("Not going to do delay tracking!! GEODEL=%d subobs=%d GPSTIME=%lld ntimes=%ld\n", subm->GEODEL, subm->subobs, subm->GPSTIME, ntimes);
               for (int loop = 0; loop < 3; loop++) {											// then we need to put some default values in (ie between observations)
                 subm->altaz[ loop ].gpstime = ( subm->subobs + loop * 4 );								// populate the true gps times for the beginning, middle and end of this *sub*observation
                 subm->altaz[ loop ].Alt = 90.0;												// Point straight up (in degrees above horizon)
@@ -1710,9 +1739,11 @@ altaz[0].Dist_km
             delay_so_far_start_mm  += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
             delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
             delay_so_far_end_mm    += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
-            fprintf(stderr, "dels: %Lf, delm: %Lf, del: %Lf, ",  get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az)
-            ,  get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az), 
-            get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az));
+            
+            DEBUG_LOG("dels: %Lf, delm: %Lf, del: %Lf, ",
+              get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az),
+              get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az), 
+              get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az));
 
             //delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
             //                            ( rfm->East * subm->altaz[ 0 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
@@ -1726,7 +1757,7 @@ altaz[0].Dist_km
             //                            ( rfm->East * subm->altaz[ 2 ].SinAzCosAlt ) +				// add the component of delay caused by the 'east' location of its position
             //                            ( rfm->Height * subm->altaz[ 2 ].SinAlt ) );				// add the component of delay caused by the 'height' of its position
           }
-          fprintf(stderr, "north: %Lf, east: %Lf, height: %Lf, ",  rfm->North, rfm->East, rfm->Height);
+          DEBUG_LOG("north: %Lf, east: %Lf, height: %Lf, ",  rfm->North, rfm->East, rfm->Height);
 //---------- Do Calibration delays ----------
 //	WIP.  Calibration delays are just a dream right now
 
@@ -1736,7 +1767,7 @@ altaz[0].Dist_km
           long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;					// Convert start delay into samples at the coarse channel sample rate
           long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;					// Convert middle delay into samples at the coarse channel sample rate
           long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;					// Convert end delay into samples at the coarse channel sample rate
-          fprintf(stderr, "start: %Lf, middle: %Lf, end: %Lf, ",  start_sub_s, middle_sub_s, end_sub_s);
+          DEBUG_LOG("start: %Lf, middle: %Lf, end: %Lf, ",  start_sub_s, middle_sub_s, end_sub_s);
 //---------- Commit to a whole sample delay and calculate the residuals --------
 
           long double whole_sample_delay = roundl( middle_sub_s );						// Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
@@ -1758,40 +1789,26 @@ altaz[0].Dist_km
           a = ( start_sub_s - middle_sub_s - middle_sub_s + end_sub_s ) * two_over_num_blocks_sqrd ;                                                          // a = (s+e-2*m)/(n*n/2)
           b = ( middle_sub_s + middle_sub_s + middle_sub_s + middle_sub_s - start_sub_s - start_sub_s - start_sub_s - end_sub_s ) * one_over_num_blocks;      // b = (4*m-3*s-e)/(n)
           c = start_sub_s ;                                                                                                                                   // c = s
-          fprintf(stderr, "a: %Lf, b: %Lf, c: %Lf, ",  a, b, c);
+          DEBUG_LOG("a: %Lf, b: %Lf, c: %Lf, ",  a, b, c);
 //      residual delays can now be interpolated for any time using 'ax^2 + bx + c' where x is the time
 
 //---------- We'll be calulating each value in turn so we're better off passing back in a form only needing 2 additions per data point.
 //		The phase-wrap delay correction phase wants the delay at time points of x=.5, x=1.5, x=2.5, x=3.5 etc, so
 //		we'll set an initial value of a×0.5^2 + b×0.5 + c to get the first point and our first step in will be:
-
-          long double initial = a * 0.25L + b * 0.5L + c;							// ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
-          long double delta = a + a + b;									// That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
-          long double delta_delta = a + a;									// ie 2a because it's the 2nd derivative
-          fprintf(stderr, "initial: %Lf, delta: %Lf, delta_delta: %Lf, ",  initial, delta, delta_delta);
-//---------- int32 maths would be fine for this and very fast provided we scaled the values into range ----------
-//      We want to calcluate in millisamples, and we want to use most of the bits in the int32, so multiply by '1000 x 2^20'
-
-          initial *= conv2int32;
-          delta *= conv2int32;
-          delta_delta *= conv2int32;
-          fprintf(stderr, "initial: %Lf, delta: %Lf, delta_delta: %Lf, ",  initial, delta, delta_delta);
-//---------- Now convert these long double floats to ints ----------
-
+          rfm->initial_delay = a * 0.25L + b * 0.5L + c;							// ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
+          rfm->delta_delay = a + a + b;									// That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
+          rfm->delta_delta_delay = a + a;									// ie 2a because it's the 2nd derivative
           rfm->ws_delay = (int16_t) whole_sample_delay;				// whole_sample_delay has already been roundl(ed) somewhere above here
-          rfm->initial_delay = (int32_t) lroundl(initial);                      // The effect of this lroundl will be lost in the noise since it's a factor of 2^20 away from anything visible but lets be consistent
-          rfm->initial_delay += (1 << 19) + (1 << 15); 				// During the >>20 that will come later to get back to millisamples we want to 'round' not truncate so add half of the (1<<20)
-                                                                                // ie (1<<19) also add a few percent (~3%) to the millisample count so that "exact" 0.5s don't round down after cummulative
-                                                                                // addition rounding errors.
-          rfm->delta_delay = (int32_t) lroundl(delta);
-          rfm->delta_delta_delay = (int32_t) lroundl(delta_delta);
-          fprintf(stderr, "ws: %d, initial: %d, delta: %d, delta_delta: %d, shifted_initial: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->initial_delay >> 20);
+          rfm->start_total_delay = start_sub_s;
+          rfm->middle_total_delay = middle_sub_s;
+          rfm->end_total_delay = end_sub_s;
+          DEBUG_LOG("ws: %d, initial: %d, delta: %d, delta_delta: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
           meta_result = 4;
 
 //---------- Print out a bunch of debug info ----------
 
           if (debug_mode) {										// Debug logging to screen
-            printf( "%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%d,%d,%d,%Lf,%Lf,%Lf,%f,%s,%f:",
+            printf( "%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s,%f:",
             subm->subobs,
             loop,
             rfm->rf_input,
@@ -1920,7 +1937,7 @@ void *makesub()
     MandC_meta_t my_MandC_meta[MAX_INPUTS];                             // Working copies of the changeable metafits/metabin data for this subobs
     MandC_meta_t *my_MandC;                                             // Make a temporary pointer to the M&C metadata for one rf input
 
-    block_0_tile_metadata_t block_0_working;				// Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
+    delay_table_entry_t block_0_working;				// Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
     int32_t w_initial_delay;						// tile's initial fractional delay (times 2^20) working copy
     int32_t w_delta_delay;						// tile's initial fractional delay step (like its 1st deriviative)
 
@@ -1996,7 +2013,8 @@ void *makesub()
 
         go4sub = TRUE;                                                                                                  // Say it all looks okay so far
 
-        ninputs_pad = subm->NINPUTS;											// We don't pad .sub files any more so these two variables are the same
+        ninputs_pad = subm->NINPUTS;									                                                               		// We don't pad .sub files any more so these two variables are the same
+        
         ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);                                                                 // Get this from 'ninputs' rounded up to multiples of 32
 
         transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_pad );                                     // Should be 5275648000 for 256T in 160+1 blocks
@@ -2048,6 +2066,7 @@ void *makesub()
           "NINPUTS_XGPU %d\n"
           "APPLY_PATH_WEIGHTS 0\n"
           "APPLY_PATH_DELAYS %d\n"
+          "APPLY_PHASE_OFFSETS 0\n"
           "INT_TIME_MSEC %d\n"
           "FSCRUNCH_FACTOR %d\n"
           "APPLY_VIS_WEIGHTS 0\n"
@@ -2067,6 +2086,10 @@ void *makesub()
           "MC_PORT 0\n"
           "MC_SRC_IP 0.0.0.0\n"
           "MWAX_U2S_VER " THISVER "-%d\n"
+          "IDX_PACKET_MAP %d+%d\n"
+          "IDX_METAFITS %d+%d\n"
+          "IDX_DELAY_TABLE %d+%d\n"
+          "IDX_MARGIN_DATA %d+%d\n"
           ;
 
         sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
@@ -2166,7 +2189,7 @@ void *makesub()
             rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
 
             block_0_working.rf_input = rfm->rf_input;				// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
-            block_0_working.ws_delay = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+            block_0_working.ws_delay_applied = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
 
             w_initial_delay = rfm->initial_delay;				// Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
             w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
@@ -2174,10 +2197,13 @@ void *makesub()
             block_0_working.initial_delay = w_initial_delay;			// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
             block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
             block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
+            block_0_working.start_total_delay = rfm->start_total_delay;
+            block_0_working.middle_total_delay = rfm->middle_total_delay;
+            block_0_working.end_total_delay = rfm->end_total_delay;
             block_0_working.num_pointings = 1;					// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
 
             for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {		// populate the fractional delay lookup table for this tile (one for each 5ms)
-              block_0_working.frac_delay[ loop ] = (w_initial_delay >> 20);	// Rounding and everything was all included when we did the original maths in the other thread
+              block_0_working.frac_delay[ loop ] = w_initial_delay;	// Rounding and everything was all included when we did the original maths in the other thread
               w_initial_delay += w_delta_delay;					// update our *TEMP* copies as we cycle through
               w_delta_delay += block_0_working.delta_delta_delay;		// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
             }
@@ -2195,9 +2221,9 @@ void *makesub()
 
 //---------- Write out the dummy map ----------
           uint32_t dummy_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
-//	  fprintf(stderr, "UDP Packet Map at 0x%08llx (len=%ld)\n", 
-//	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
-//	 		  dummy_map_len);
+	        DEBUG_LOG("UDP Packet Map at 0x%08llx (len=%ld)\n", 
+    	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
+	 	    	  dummy_map_len);
           
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
@@ -2247,7 +2273,7 @@ void *makesub()
 
             block0_margin_len += bytes2copy * 4;
           }
-          fprintf(stdout, "UDP margin packets at 0x%08llx (len=%d)\n", 
+          DEBUG_LOG("UDP margin packets at 0x%08llx (len=%d)\n", 
 	 		      (UINT64) block0_margin_start - (UINT64) ext_shm_buf, 
 	    		  block0_margin_len);
           fflush(stdout);
@@ -2491,48 +2517,65 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
     fprintf(stderr, "timed out waiting for metadata.\n");
   }
 
-  fprintf(stderr, "NINPUTS %d\n", sub[0].NINPUTS);
+  DEBUG_LOG("NINPUTS %d\n", sub[0].NINPUTS);
   altaz_meta_t *altaz = subm->altaz;
-  for(int i=0; i<3; i++)
-    fprintf(stderr, "AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %Lf, SinAzCosAlt: %Lf, CosAzCosAlt: %Lf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
+  for(int i=0; i<3; i++) {
+    DEBUG_LOG("AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %Lf, SinAzCosAlt: %Lf, CosAzCosAlt: %Lf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
+  }
   fflush(stderr);
 
   tile_meta_t *rfm;
-  block_0_tile_metadata_t block_0_working;
+  delay_table_entry_t dt_entry_working;
   int MandC_rf;
   int ninputs_pad = sub[0].NINPUTS;
-  int32_t w_initial_delay;
-  int32_t w_delta_delay;
+  double w_initial_delay;
+  double w_delta_delay;
 
   /// Copied and pasted from `makesub`:
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
 
             rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
 
-            block_0_working.rf_input = rfm->rf_input;				// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
-            block_0_working.ws_delay = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+            dt_entry_working.rf_input = rfm->rf_input;			              	// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
+            dt_entry_working.ws_delay_applied = rfm->ws_delay;	       			// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+            w_initial_delay = rfm->initial_delay;				                    // Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
+            w_delta_delay = rfm->delta_delay;				                      	// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
 
-            w_initial_delay = rfm->initial_delay;				// Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
-            w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
+            dt_entry_working.initial_delay = w_initial_delay;		           	// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
+            dt_entry_working.delta_delay = w_delta_delay;			              // Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
+            dt_entry_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
+            dt_entry_working.num_pointings = 1;				                    	// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
 
-            block_0_working.initial_delay = w_initial_delay;			// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
-            block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
-            block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
-            block_0_working.num_pointings = 1;					// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
-
-            for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {		// populate the fractional delay lookup table for this tile (one for each 5ms)
-              block_0_working.frac_delay[ loop ] = (w_initial_delay >> 20);	// Rounding and everything was all included when we did the original maths in the other thread
-              w_initial_delay += w_delta_delay;					// update our *TEMP* copies as we cycle through
-              w_delta_delay += block_0_working.delta_delta_delay;		// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
+            for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {	    	// populate the fractional delay lookup table for this tile (one for each 5ms)
+              dt_entry_working.frac_delay[ loop ] = w_initial_delay;	      // Rounding and everything was all included when we did the original maths in the other thread
+              w_initial_delay += w_delta_delay;				                      // update our *TEMP* copies as we cycle through
+              w_delta_delay += dt_entry_working.delta_delta_delay;	       	// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
             }
 
             //dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
-            printf("%d,%d,%d,%d,%d,%d,", rfm->Tile, rfm->rf_input, rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
+            printf("%d,%d,%.*f,%.*f,%.*f,%.*f,%.*f,%.*f,%d,%d,", 
+              
+              rfm->rf_input,
+              rfm->ws_delay, 
+              DECIMAL_DIG, 
+              rfm->start_total_delay, 
+              DECIMAL_DIG, 
+              rfm->middle_total_delay, 
+              DECIMAL_DIG, 
+              rfm->end_total_delay, 
+              DECIMAL_DIG, 
+              rfm->initial_delay, 
+              DECIMAL_DIG, 
+              rfm->delta_delay, 
+              DECIMAL_DIG,
+              rfm->delta_delta_delay,
+              1,
+              0);
             for ( int loop = 0; loop < POINTINGS_PER_SUB-1; loop++ ) {
-              printf("%d,", block_0_working.frac_delay[loop]);
+              printf("%.*f,", DECIMAL_DIG, dt_entry_working.frac_delay[loop]);
             }
-            printf("%d\n", block_0_working.frac_delay[POINTINGS_PER_SUB-1]);
-            memset(&block_0_working, 0, sizeof(block_0_tile_metadata_t));
+            printf("%.*f\n", DECIMAL_DIG, dt_entry_working.frac_delay[POINTINGS_PER_SUB-1]);
+            memset(&dt_entry_working, 0, sizeof(delay_table_entry_t));
           }
 
 
