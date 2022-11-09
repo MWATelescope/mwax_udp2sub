@@ -2066,7 +2066,7 @@ void *makesub()
           "NINPUTS_XGPU %d\n"
           "APPLY_PATH_WEIGHTS 0\n"
           "APPLY_PATH_DELAYS %d\n"
-          "APPLY_PHASE_OFFSETS 0\n"
+          "APPLY_PATH_PHASE_OFFSETS %d\n"
           "INT_TIME_MSEC %d\n"
           "FSCRUNCH_FACTOR %d\n"
           "APPLY_VIS_WEIGHTS 0\n"
@@ -2090,10 +2090,11 @@ void *makesub()
           "IDX_METAFITS %d+%d\n"
           "IDX_DELAY_TABLE %d+%d\n"
           "IDX_MARGIN_DATA %d+%d\n"
+          "MWAX_SUB_VER 2\n"
           ;
 
         sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
-              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
+              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
               conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
