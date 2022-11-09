@@ -1128,7 +1128,7 @@ void add_meta_fits()
 //    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
     static long double one_over_num_blocks = ( ((long double) 1L) / (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) );      // Frequently used during fitting parabola
 
-    static long double conv2int32 = (long double)( 1 << 10 ) * (long double) 1000000L;                     // Frequently used conversion factor to microsamples and making use of extra bits in int32
+    //static long double conv2int32 = (long double)( 1 << 10 ) * (long double) 1000000L;                     // Frequently used conversion factor to microsamples and making use of extra bits in int32
     static long double res_max = (long double) 2L;                                                      // Frequently used in range checking. Largest allowed residual.
     static long double res_min = (long double) -2L;                                                     // Frequently used in range checking. Smallest allowed residual.
 
@@ -1941,8 +1941,8 @@ void *makesub()
     MandC_meta_t *my_MandC;                                             // Make a temporary pointer to the M&C metadata for one rf input
 
     delay_table_entry_t block_0_working;				// Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
-    int32_t w_initial_delay;						// tile's initial fractional delay (times 2^20) working copy
-    int32_t w_delta_delay;						// tile's initial fractional delay step (like its 1st deriviative)
+    double w_initial_delay;						// tile's initial fractional delay (times 2^20) working copy
+    double w_delta_delay;						// tile's initial fractional delay step (like its 1st deriviative)
 
     int source_packet;                                                  // which packet (of 5002) contains the first byte of data we need
     int source_offset;                                                  // what is the offset in that packet of the first byte we need
@@ -2254,7 +2254,7 @@ void *makesub()
  */
           uint32_t block0_margin_len = 0;
           uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
-          uint8_t *block0_margin_start = block0_margin_dst;
+          //uint8_t *block0_margin_start = block0_margin_dst;
           bytes2copy = UDP_PAYLOAD_SIZE;
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
@@ -2522,7 +2522,7 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   }
 
   DEBUG_LOG("NINPUTS %d\n", sub[0].NINPUTS);
-  altaz_meta_t *altaz = subm->altaz;
+  //altaz_meta_t *altaz = subm->altaz;
   for(int i=0; i<3; i++) {
     DEBUG_LOG("AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %Lf, SinAzCosAlt: %Lf, CosAzCosAlt: %Lf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
   }
