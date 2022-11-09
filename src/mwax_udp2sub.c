@@ -423,7 +423,7 @@ typedef struct tile_meta {                              // Structure format for 
 //    int16_t num_pointings;			            	// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
 //    int32_t frac_delay[POINTINGS_PER_SUB];		// 1601 Fractional delays in units of a millionth of a whole sample time.  Not supposed to be out of range of -2000 to 2000 millisamples (inclusive).
 //} delay_table_entry_t;
-
+#pragma pack(push,1)
 // structure for each signal path
 typedef struct delay_table_entry {
     uint16_t rf_input;
@@ -438,6 +438,7 @@ typedef struct delay_table_entry {
     int16_t reserved;
     float frac_delay[POINTINGS_PER_SUB];        // 1600 fractional delays in fractions of a whole sample time.  Not supposed to be out of range of -1 to 1 samples (inclusive).
 } delay_table_entry_t;
+#pragma pack(pop)
 
 typedef struct subobs_udp_meta {                        // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets
 
