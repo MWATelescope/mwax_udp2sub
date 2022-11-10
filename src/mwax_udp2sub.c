@@ -5,8 +5,10 @@
 //            LAW Luke Williams luke.a.williams@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 86
-#define THISVER "2.08"
+#define BUILD 87
+#define THISVER "2.09"
+//
+// 2.09-087     2022-11-10 LAW  Factor out `reallocarray`.
 //
 // 2.08-086     2022-11-09 LAW  New delay table format.
 //
