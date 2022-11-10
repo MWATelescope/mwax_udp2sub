@@ -688,7 +688,7 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
     row++;
   }
 done:
-  *config_records = reallocarray(records, row + 1, sizeof(udp2sub_config_t));
+  *config_records = realloc(records, (row + 1) * sizeof(udp2sub_config_t));
   free(data);
   fprintf(stderr, "%d instance record(s) found.\n", row + 1);
   return row + 1;
