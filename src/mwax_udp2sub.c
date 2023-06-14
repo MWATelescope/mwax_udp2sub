@@ -273,7 +273,7 @@
 #define LIGHTSPEED (299792458000.0L)
 
 #define SUBFILE_HEADER_SIZE (4096LL)
-#define SAMPLES_PER_SEC (1280000LL)
+#define SAMPLES_PER_SEC (1638400LL)
 #define COARSECHAN_BANDWIDTH (1280000LL)
 #define ULTRAFINE_BW (200ll)
 #define BLOCKS_PER_SUB (160LL)
@@ -470,6 +470,7 @@ typedef struct subobs_udp_meta {                        // Structure format for 
     int CABLEDEL;
     int GEODEL;
     int CALIBDEL;
+    int DERIPPLE;
     char PROJECT[32];
     char MODE[32];
 
@@ -931,7 +932,7 @@ void *UDP_parse()
 
 //---------- At this point in the loop, we are about to process the next arrived UDP packet, and it is located at my_udp ----------
 
-        if ( my_udp->packet_type == 0x20 ) {                            // If it's a real packet off the network with some fields in network order, they need to be converted to host order and have a few tweaks made before we can use the packet
+        if ( my_udp->packet_type == 0x30 ) {                            // If it's a real packet off the network with some fields in network order, they need to be converted to host order and have a few tweaks made before we can use the packet
 
           my_udp->subsec_time = ntohs( my_udp->subsec_time );           // Convert subsec_time to a usable uint16_t which at this stage is still within a single second
           my_udp->GPS_time = ntohl( my_udp->GPS_time );                 // Convert GPS_time (bottom 32 bits only) to a usable uint32_t
@@ -1313,6 +1314,12 @@ if (debug_mode || force_geo_delays) subm->GEODEL = 3;
             fits_read_key( fptr, TINT, "CALIBDEL", &(subm->CALIBDEL), NULL, &status );                  // Read the CALIBDEL field. (0=Don't apply calibration solutions. 1=Do apply)
             if (status) {
               printf ( "Failed to read CALIBDEL\n" );
+              fflush(stdout);
+            }
+
+            fits_read_key( fptr, TINT, "DERIPPLE", &(subm->DERIPPLE), NULL, &status );
+            if (status) {
+              printf ( "Failed to read deripple option\n" );
               fflush(stdout);
             }
 
@@ -2073,6 +2080,7 @@ void *makesub()
           "APPLY_PATH_DELAYS %d\n"
           "APPLY_PATH_PHASE_OFFSETS %d\n"
           "INT_TIME_MSEC %d\n"
+          "APPLY_COARSE_DERIPPLE %d\n"
           "FSCRUNCH_FACTOR %d\n"
           "APPLY_VIS_WEIGHTS 0\n"
           "TRANSFER_SIZE %lld\n"
@@ -2099,7 +2107,7 @@ void *makesub()
           ;
 
         sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
-              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
+              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, subm->DERIPPLE, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
               conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
