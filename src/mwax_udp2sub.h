@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 // Static configuration
+#define BUILD 100
+#define THISVER "3.0.0-rc1"
 #define LOG_OUTPUT stderr      // Where to send log messages
 #define HOSTNAME_LENGTH 21     // Max length of hostname strings
 #define MONITOR_IP "224.0.2.2" // Heartbeat destination address
@@ -28,10 +30,10 @@
 #define OS_NTIMESAMPLES ((OS_SAMPLE_RATE * 8LL) / BLOCKS_PER_SUB)
 #define CS_UDP_PER_RF_PER_SUB ( ((CS_SAMPLE_RATE * 8LL * 2LL) / UDP_PAYLOAD_SIZE) + 2 )
 #define OS_UDP_PER_RF_PER_SUB ( ((OS_SAMPLE_RATE * 8LL * 2LL) / UDP_PAYLOAD_SIZE) + 2 )
-#define CS_SUBSECSPERSEC ( (CS_SAMPLE_RATE * 2LL)/ UDP_PAYLOAD_SIZE )
-#define OS_SUBSECSPERSEC ( (OS_SAMPLE_RATE * 2LL)/ UDP_PAYLOAD_SIZE )
-#define CS_SUBSECSPERSUB ( CS_SUBSECSPERSEC * 8LL )
-#define OS_SUBSECSPERSUB ( OS_SUBSECSPERSEC * 8LL )
+#define CS_SUBSECPERSEC ( (CS_SAMPLE_RATE * 2LL)/ UDP_PAYLOAD_SIZE )
+#define OS_SUBSECPERSEC ( (OS_SAMPLE_RATE * 2LL)/ UDP_PAYLOAD_SIZE )
+#define CS_SUBSECPERSUB ( CS_SUBSECPERSEC * 8LL )
+#define OS_SUBSECPERSUB ( OS_SUBSECPERSEC * 8LL )
 
 // UDP packet structure
 #pragma pack(push,1)                   // We're writing this header into all our packets, so we want/need to force the compiler not to add it's own idea of structure padding
@@ -84,45 +86,7 @@ typedef struct instance_config {               // Structure for the configuratio
   char monitor_if[20];                         // Local interface address for monitoring packets
 } instance_config_t;
 
-/** Application state */
-typedef struct app_state {
-  volatile uint64_t UDP_added_to_buff = 0;                // Total number of packets received and placed in the buffer.  If it overflows we are in trouble and need a restart.
-  volatile uint64_t UDP_removed_from_buff = 0;            // Total number of packets pulled from buffer and space freed up.  If it overflows we are in trouble and need a restart.
-  uint64_t UDP_num_slots;                                 // Must be at least 3000000 for mwax07 with 128T. 3000000 will barely make it!
-  bool terminate;                                         // Set to true to terminate the program
-  uint32_t GPS_offset;                                    // Logging only.  Needs to be updated on leap seconds
-  subobs_udp_meta_t *sub;                                 // Pointer to the four subobs metadata arrays
-  // Data buffers
-  struct mmsghdr *msgvecs;
-  struct iovec *iovecs;
-  pkt_health_t monitor;     // Health packet buffer
-  pkt_data_t *UDPbuf;       // Data packet storage buffer
-  char *blank_sub_line;     // Zero-filled data block line.
-  char *sub_header;         // Pointer to a buffer that's the size of a sub file header.
-  // System configuration
-  char *hostname;
-  int instance_id;
-  char *config_path;
-  int prog_build;          // Build number
-  bool debug_mode;         // Enable extra logging
-  instance_config_t cfg;
-  delaygen_config_t delaygen_cfg;
-  // Configuration overrides
-  bool force_cable_delays;   // Always apply cable delays
-  bool force_geo_delays;     // Always apply geometric delays
-  bool force_channel_id;     // Use the specified channel selection
-  bool force_instance_id;    // Use the specified instance id selection
-  int chan_id_override;      // Channel override value
-  int instance_id_override;  // Instance override value
-} app_state_t;
-
-/** Delay generator configuration. */
-typedef struct delaygen_config {
-  bool enabled;                               // Is the delay generator enabled?
-  uint64_t obsid;                             // The observation ID to generate delays for.
-  uint32_t subobs_idx;                        // The subobservation index to generate delays for.
-} delaygen_config_t;
-
+/** Altitute/azimuth metadata */
 typedef struct altaz_meta {				// Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
     uint64_t gpstime;
     float Alt;
@@ -210,6 +174,47 @@ typedef struct subobs_udp_meta {                        // Structure format for 
     uint64_t subsecpersub;
 } subobs_udp_meta_t;
 
+/** Delay generator configuration. */
+typedef struct delaygen_config {
+  bool enabled;                               // Is the delay generator enabled?
+  uint64_t obsid;                             // The observation ID to generate delays for.
+  uint32_t subobs_idx;                        // The subobservation index to generate delays for.
+} delaygen_config_t;
+
+/** Application state */
+typedef struct app_state {
+  volatile uint64_t UDP_added_to_buff;         // Total number of packets received and placed in the buffer.  If it overflows we are in trouble and need a restart.
+  volatile uint64_t UDP_removed_from_buff;     // Total number of packets pulled from buffer and space freed up.  If it overflows we are in trouble and need a restart.
+  uint64_t UDP_num_slots;                      // Must be at least 3000000 for mwax07 with 128T. 3000000 will barely make it!
+  bool terminate;                              // Set to true to terminate the program
+  uint32_t GPS_offset;                         // Logging only.  Needs to be updated on leap seconds
+  subobs_udp_meta_t *sub;                      // Pointer to the four subobs metadata arrays
+  // Data buffers
+  struct mmsghdr *msgvecs;
+  struct iovec *iovecs;
+  pkt_health_t monitor;     // Health packet buffer
+  pkt_data_t *UDPbuf;       // Data packet storage buffer
+  char *blank_sub_line;     // Zero-filled data block line.
+  char *sub_header;         // Pointer to a buffer that's the size of a sub file header.
+  // System configuration
+  char *hostname;
+  int instance_id;
+  char *config_path;
+  int prog_build;          // Build number
+  bool debug_mode;         // Enable extra logging
+  instance_config_t cfg;
+  delaygen_config_t delaygen_cfg;
+  // Configuration overrides
+  bool force_cable_delays;   // Always apply cable delays
+  bool force_geo_delays;     // Always apply geometric delays
+  bool force_channel_id;     // Use the specified channel selection
+  bool force_instance_id;    // Use the specified instance id selection
+  int chan_id_override;      // Channel override value
+  int instance_id_override;  // Instance override value
+} app_state_t;
+
+
+
 #pragma pack(push,1)
 
 // structure for each signal path
@@ -229,12 +234,10 @@ typedef struct delay_table_entry {
 #pragma pack(pop)
 
 
-typedef struct MandC_meta {                             // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets.  Array with one entry per rf_input
-
-    uint16_t rf_input;                                  // tile/antenna and polarisation (LSB is 0 for X, 1 for Y)
-    int start_byte;                                     // What byte (not sample) to start at.  Remember we store a whole spare packet before the real data starts
-    uint16_t seen_order;                                // For this subobs (only). What order was this rf input seen in?  That tells us where we need to look in the udp_volts pointer array
-
+typedef struct MandC_meta { // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets.  Array with one entry per rf_input
+    uint16_t rf_input;      // tile/antenna and polarisation (LSB is 0 for X, 1 for Y)
+    int start_byte;         // What byte (not sample) to start at.  Remember we store a whole spare packet before the real data starts
+    uint16_t seen_order;    // For this subobs (only). What order was this rf input seen in?  That tells us where we need to look in the udp_volts pointer array
 } MandC_meta_t;
 
 // Log levels
@@ -245,14 +248,36 @@ typedef enum {
   LOG_DEBUG
 } log_level_t;
 
+// Subobservation slot states
+typedef enum {
+  SLOT_FREE = 0,
+  SLOT_ACTIVE = 1,
+  SLOT_WRITE_PENDING = 2,
+  SLOT_WRITE_IN_PROGRESS = 3,
+  SLOT_WRITE_COMPLETE = 4,
+  SLOT_WRITE_GENERAL_FAILURE = 5,
+  SLOT_EXPIRED = 6,
+  SLOT_WRITE_RENAME_FAILED = 10,
+} slot_state_t;
+
+// Subobservation metadata states
+typedef enum {
+  SLOT_META_ABSENT = 0,
+  SLOT_META_IN_PROGRESS = 2,
+  SLOT_META_DONE = 4,
+  SLOT_META_FAILED = 5
+} subobs_meta_state_t;
+
 // Packet types
-#define PACKET_TYPE_CRITICAL    0x20
-#define PACKET_TYPE_OVERSAMPLED 0x30
+#define PACKET_TYPE_CRITICAL      0x20 // Contains critically sampled data
+#define PACKET_TYPE_OVERSAMPLED   0x30 // Contains oversampled data
+#define PACKET_TYPE_CRITICAL_H    0x21 // Contains critically sampled data, with metadata in host byte order
+#define PACKET_TYPE_OVERSAMPLED_H 0x31 // Contains oversampled data, with metadata in host byte order
 
 // Other constants
 #define CLOSEDOWN (0xFFFFFFFF)
 
-// Common functions
+// Utility functions
 void log_message(const char *tag, log_level_t level, const char *fmt, ...);
 int set_cpu_affinity(const char *name, uint32_t mask);
 int load_config_file(char *path, instance_config_t **config_records);

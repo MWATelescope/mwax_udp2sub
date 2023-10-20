@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "mwax_udp2sub.h"
 
@@ -146,7 +148,7 @@ void config_load(app_state_t *state) {
   char *path = state->config_path;
   char *host = state->hostname;
   int16_t instance_idx = -1; // Initially assume there is no matching record
-  uint16_t count = load_config_file(path, &records);
+  uint16_t count = load_config_db(path, &records);
 
   if(records == NULL) {
     log_error("Failed to load configuration database from %s: no records found.", path);

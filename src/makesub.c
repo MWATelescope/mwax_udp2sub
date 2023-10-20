@@ -1,17 +1,26 @@
+#define _GNU_SOURCE
+
+#include <dirent.h>
+#include <time.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+
+#include "mwax_udp2sub.h"
+
+const char *TAG = "makesub";
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // makesub - Every time an 8 second block of udp packets is available, try to generate a sub files for the correlator
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
-void *makesub() {
+void *makesub(void *args) {
+    app_state_t *state = (app_state_t *)args;
+    instance_config_t conf = state->cfg;
 
-    printf("Makesub started\n");
-    fflush(stdout);
+    log_info("Initializing...");
 
-//--------------- Set CPU affinity ---------------
-
-    printf("Set process makesub cpu affinity returned %d\n", set_cpu_affinity ( conf.cpu_mask_makesub ) );
-    fflush(stdout);
+    set_cpu_affinity (TAG, conf.cpu_mask_makesub);
 
 //---------------- Initialize and declare variables ------------------------
 
@@ -29,7 +38,7 @@ void *makesub() {
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
-    char *block1_add;							// The address where the 1st data block is.  That is *after* the 4k header *and* after the 0th block which is metadata
+    char *block1_add;					                                      		// The address where the 1st data block is.  That is *after* the 4k header *and* after the 0th block which is metadata
 
     int ext_shm_fd;                                                     // File descriptor for the shmem block
 
@@ -79,14 +88,11 @@ void *makesub() {
     struct timespec started_sub_write_time;
     struct timespec ended_sub_write_time;
 
-//---------------- Main loop to live in until shutdown -------------------
-
-    printf("Makesub entering main loop\n");
-    fflush(stdout);
+    log_info("Entering main loop");
 
     clock_gettime( CLOCK_REALTIME, &ended_sub_write_time);              // Fake the ending time for the last sub file ('cos like there wasn't one y'know but the logging will expect something)
 
-    while (!terminate) {                                                // If we're not supposed to shut down, let's find something to do
+    while (!state->terminate) {                                                // If we're not supposed to shut down, let's find something to do
 
 //---------- look for a sub to write out ----------
 
@@ -94,15 +100,12 @@ void *makesub() {
 
       for ( loop = 0 ; loop < 4 ; loop++ ) {                            // Look through all four subobs meta arrays
 
-        if ( sub[loop].state == 2  && sub[loop].meta_done == 4) {       // If this sub is ready to write out
+        if ( state->sub[loop].state == SLOT_WRITE_PENDING  && state->sub[loop].meta_done == SLOT_META_DONE) {       // If this sub is ready to write out
 
           if ( subobs_ready2write == -1 ) {                             // check if we've already found a different one to write out and if we haven't
-
             subobs_ready2write = loop;                                  // then mark this one as the best so far
-
           } else {                                                      // otherwise we need to work out
-
-            if ( sub[subobs_ready2write].subobs > sub[loop].subobs ) {  // if that other one was for a later sub than this one
+            if ( state->sub[subobs_ready2write].subobs > state->sub[loop].subobs ) {  // if that other one was for a later sub than this one
               subobs_ready2write = loop;                                // in which case, mark this one as the best so far
             }
           }
@@ -118,16 +121,12 @@ void *makesub() {
 //---------- but if we *do* have a sub file ready to write out ----------
 
         clock_gettime( CLOCK_REALTIME, &started_sub_write_time);        // Record the start time before we actually get started.  The clock starts ticking from here.
-
-        subm = &sub[subobs_ready2write];                                // Temporary pointer to our sub's metadata array
-
+        subm = &state->sub[subobs_ready2write];                                // Temporary pointer to our sub's metadata array
         subm->msec_wait = ( ( started_sub_write_time.tv_sec - ended_sub_write_time.tv_sec ) * 1000 ) + ( ( started_sub_write_time.tv_nsec - ended_sub_write_time.tv_nsec ) / 1000000 ); // msec since the last sub ending
+        subm->udp_at_start_write = state->UDP_added_to_buff;                   // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
+        subm->state = SLOT_WRITE_IN_PROGRESS;                                                // Record that we're working on this one!
 
-        subm->udp_at_start_write = UDP_added_to_buff;                   // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
-
-        subm->state = 3;                                                // Record that we're working on this one!
-
-        sub_result = 5;                                                 // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
+        sub_result = SLOT_WRITE_GENERAL_FAILURE;                                                 // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
 //---------- Do some last-minute metafits work to prepare ----------
 
@@ -149,7 +148,7 @@ void *makesub() {
           if ( my_MandC_meta[loop].seen_order != 0 ) active_rf_inputs++;                                                // seen_order starts at 1. If it's 0 that means we didn't even get 1 udp packet for this rf_input
         }
 
-        if ( debug_mode ) {                                                                                             // If we're in debug mode
+        if ( state->debug_mode ) {                                                                                             // If we're in debug mode
           sprintf( dest_file, "%s/%lld_%d_%d.free", conf.shared_mem_dir, subm->GPSTIME, subm->subobs, subm->COARSE_CHAN );      // Construct the full file name including path for a .free file
         } else {
           sprintf( dest_file, "%s/%lld_%d_%d.sub", conf.shared_mem_dir, subm->GPSTIME, subm->subobs, subm->COARSE_CHAN );       // Construct the full file name including path for a .sub (regular) file
@@ -157,16 +156,12 @@ void *makesub() {
 
 //---------- Make a 4K ASCII header for the sub file ----------
 
-        memset( sub_header, 0, SUBFILE_HEADER_SIZE );                                                                   // Pre fill with null chars just to ensure we don't leave junk anywhere in the header
-
+        memset(state->sub_header, 0, SUBFILE_HEADER_SIZE);                                                                   // Pre fill with null chars just to ensure we don't leave junk anywhere in the header
         int64_t obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
-
         my_time = subm->UNIXTIME - (8 * 60 * 60);                                                                       // Adjust for time zone AWST (Perth time to GMT)
         t = ctime( &my_time );
-
         memcpy ( srch,&t[4],3 );
         mnth = ( strstr ( months, srch ) - months )/4 + 1;
-
         sprintf( utc_start, "%.4s-%02d-%.2s-%.8s", &t[20], mnth, &t[8], &t[11] );                                       // Shift all the silly date stuff into a string
 
         if ( utc_start[8] == ' ' ) utc_start[8] = '0';
@@ -213,7 +208,7 @@ void *makesub() {
           "MWAX_SUB_VER 2\n"
           ;
 
-        sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
+        sprintf( state->sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
               NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
               conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
 
@@ -225,9 +220,8 @@ void *makesub() {
           dir = opendir( conf.shared_mem_dir );                                                         // Open up the shared memory directory
 
           if ( dir == NULL ) {                                                                          // If the directory doesn't exist we must be running on an incorrectly set up server
-            printf( "Fatal error: Directory %s does not exist\n", conf.shared_mem_dir );
-            fflush(stdout);
-            terminate = true;                                                                           // Tell every thread to close down
+            log_error("FATAL: Directory %s does not exist.", conf.shared_mem_dir);
+            state->terminate = true;                                                                           // Tell every thread to close down
             pthread_exit(NULL);                                                                         // and close down ourselves.
           }
 
@@ -242,11 +236,7 @@ void *makesub() {
                 sprintf( this_file, "%s/%s", conf.shared_mem_dir, dp->d_name );                         // Construct the full file name including path
                 if ( stat ( this_file, &filestats ) == 0 ) {                                            // Try to read the file statistics and if they are available
                   if ( filestats.st_size == desired_size ) {                                            // If the file is exactly the size we need
-
-                    // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
-
                     free_files++;                                                                       // That's one more we can use!
-
                     if ( filestats.st_ctim.tv_sec < earliest_file ) {                                   // and this file has been there longer than the longest one we've found so far (ctime)
                       earliest_file = filestats.st_ctim.tv_sec;                                         // We have a new 'oldest' time to beat
                       strcpy( best_file, this_file );                                                   // and we'll store its name
@@ -266,55 +256,37 @@ void *makesub() {
 
         if ( go4sub ) {                                                                                 // If everything is okay so far, enter the next block of code
           go4sub = false;                                                                               // but go back to assuming a failure unless we succeed in the next bit
-
-          // printf( "The winner is %s\n", best_file );
-
           if ( rename( best_file, conf.temp_file_name ) != -1 ) {                                       // If we can rename the file to our temporary name
-
             if ( (ext_shm_fd = shm_open( &conf.temp_file_name[8], O_RDWR, 0666)) != -1 ) {              // Try to open the shmem file (after removing "/dev/shm" ) and if it opens successfully
-
               if ( (ext_shm_buf = (char *) mmap (NULL, desired_size, PROT_READ | PROT_WRITE, MAP_SHARED , ext_shm_fd, 0)) != ((char *)(-1)) ) {      // and if we can mmap it successfully
                 go4sub = true;                                                                          // Then we are all ready to use the buffer so remember that
               } else {
-                printf( "mmap failed\n" );
-                fflush(stdout);
+                log_error("mmap failed");
               }
-
-              close( ext_shm_fd );                                                                      // If the shm_open worked we want to close the file whether or not the mmap worked
-
+              close(ext_shm_fd); // If the shm_open worked we want to close the file whether or not the mmap worked
             } else {
-              printf( "shm_open failed\n" ) ;
-              fflush(stdout);
+              log_error("shm_open failed");
             }
-
           } else {
-            printf( "Failed rename\n" );
-            fflush(stdout);
+            log_error("Failed rename");
           }
         }
 
 //---------- Hopefully we have an mmap to a sub file in shared memory and we're ready to fill it with data ----------
 
         if ( go4sub ) {                                                         // If everything is good to go so far
-
           dest = ext_shm_buf;                                                   // we'll be trying to write to this block of RAM in strict address order, starting at the beginning (ie ext_shm_buf)
-
-          dest = mempcpy( dest, sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
-
+          dest = mempcpy( dest, state->sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
           block1_add = dest + ( ninputs_pad * SUB_LINE_SIZE );			// Work out where we need to be when we write out the 1st block (ie after the 0th block). This makes it easy for us to 'pad out' the 0th block to a full block size.
 
 //---------- Write out the 0th block (the tile metadata block) ----------
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
-
             rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
-
             block_0_working.rf_input = rfm->rf_input;				// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
             block_0_working.ws_delay_applied = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
-
             w_initial_delay = rfm->initial_delay;				// Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
             w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
-
             block_0_working.initial_delay = w_initial_delay;			// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
             block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
             block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
@@ -322,13 +294,11 @@ void *makesub() {
             block_0_working.middle_total_delay = rfm->middle_total_delay;
             block_0_working.end_total_delay = rfm->end_total_delay;
             block_0_working.num_pointings = 1;					// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
-
             for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {		// populate the fractional delay lookup table for this tile (one for each 5ms)
               block_0_working.frac_delay[ loop ] = w_initial_delay;	// Rounding and everything was all included when we did the original maths in the other thread
               w_initial_delay += w_delta_delay;					// update our *TEMP* copies as we cycle through
               w_delta_delay += block_0_working.delta_delta_delay;		// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
             }
-
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
@@ -371,7 +341,7 @@ void *makesub() {
  */
           uint32_t block0_margin_len = 0;
           uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
-          //uint8_t *block0_margin_start = block0_margin_dst;
+          uint8_t *block0_margin_start = block0_margin_dst;
           bytes2copy = UDP_PAYLOAD_SIZE;
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
@@ -391,105 +361,58 @@ void *makesub() {
             source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-1];
             if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
             block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
-
             block0_margin_len += bytes2copy * 4;
           }
-          DEBUG_LOG("UDP margin packets at 0x%08llx (len=%d)\n", 
-	 		      (uint64_t) block0_margin_start - (uint64_t) ext_shm_buf, 
-	    		  block0_margin_len);
-          fflush(stdout);
-
+          log_debug("UDP margin packets at 0x%08llx (len=%d)", (uint64_t) block0_margin_start - (uint64_t) ext_shm_buf, block0_margin_len);
 
 //---------- Write out the voltage data blocks ----------
 
           for ( block = 1; block <= BLOCKS_PER_SUB; block++ ) {                 // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
-
             for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {          // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.  This is likely to be similar to the list we actually saw, but may not be identical!
-
               my_MandC = &my_MandC_meta[MandC_rf];                              // Make a temporary pointer to the M&C metadata for this rf input.  NB these are sorted in order they need to be written out as opposed to the order the packets arrived.
-
               left_this_line = SUB_LINE_SIZE;
-
               while ( left_this_line > 0 ) {                                    // Keep going until we've finished writing out a whole line of the sub file
-
                 source_packet = ( my_MandC->start_byte / UDP_PAYLOAD_SIZE );    // Initially the udp payload size is a power of 2 so this could be done faster with a bit shift, but what would happen if the packet size changed?
                 source_offset = ( my_MandC->start_byte % UDP_PAYLOAD_SIZE );    // Initially the udp payload size is a power of 2 so this could be done faster with a bit mask, but what would happen if the packet size changed?
                 source_remain = ( UDP_PAYLOAD_SIZE - source_offset );           // How much of the packet is left in bytes?  It should be an even number and at least 2 or I have a bug in the logic or code
-
                 source_ptr = subm->udp_volts[my_MandC->seen_order][source_packet];      // Pick up the pointer to the udp volt data we need (assuming we ever saw it arrive)
                 if ( source_ptr == NULL ) {                                             // but if it never arrived
                   source_ptr = dummy_volt_ptr;                                          // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
                   subm->udp_dummy++;                                                    // The number of dummy packets we needed to insert to pad things out. Make a note for reporting and debug purposes
-                  monitor.udp_dummy++;
+                  state->monitor.udp_dummy++;
                 }
-
-                bytes2copy = ( (source_remain < left_this_line) ? source_remain : left_this_line );             // Get the minimum of the remaining length of the udp volt payload or the length of line left to populate
-
-                dest = mempcpy( dest, source_ptr + source_offset, bytes2copy );         // Do the memory copy from the udp payload to the sub file and update the destination pointer
-
-                left_this_line -= bytes2copy;                                           // Keep up to date with the remaining amount of work needed on this line
-                my_MandC->start_byte += bytes2copy;                                     // and where we are up to in reading them
-
+                bytes2copy = ( (source_remain < left_this_line) ? source_remain : left_this_line ); // Get the minimum of the remaining length of the udp volt payload or the length of line left to populate
+                dest = mempcpy( dest, source_ptr + source_offset, bytes2copy );                     // Do the memory copy from the udp payload to the sub file and update the destination pointer
+                left_this_line -= bytes2copy;                                                       // Keep up to date with the remaining amount of work needed on this line
+                my_MandC->start_byte += bytes2copy;                                                 // and where we are up to in reading them
               }                                                                 // We've finished the udp packet
-
             }                                                                   // We've finished the signal chain for this block
-
           }                                                                     // We've finished the block
 
           // By here, the entire sub has been written out to shared memory and it's time to close it out and rename it so it becomes available for other programs
-
-          if ( (dest - ext_shm_buf) != desired_size ) printf("Memory pointer error in writing sub file!\n");	// before we do that, let's just do a quick check to see we ended up exactly at the end, so we can confirm all our maths is right.
-
+          if ( (dest - ext_shm_buf) != desired_size ) 
+            log_warning("Memory pointer error in writing sub file!");	// before we do that, let's just do a quick check to see we ended up exactly at the end, so we can confirm all our maths is right.
           munmap(ext_shm_buf, desired_size);                                    // Release the mmap for the whole sub file
-
           if ( rename( conf.temp_file_name, dest_file ) != -1 ) {               // Rename my temporary file to a final sub file name, thus releasing it to other programs
-            sub_result = 4;                                                     // This was our last check.  If we got to here, the sub file worked, so prepare to write that to monitoring system
+            sub_result = SLOT_WRITE_COMPLETE;                                   // This was our last check.  If we got to here, the sub file worked, so prepare to write that to monitoring system
           } else {
-            sub_result = 10;                                                    // This was our last check.  If we got to here, the sub file rename failed, so prepare to write that to monitoring system
-            printf( "Final rename failed.\n" ) ;                                // but if that fails, I'm not really sure what to do.  Let's just note it and see if it ever happens
-            fflush(stdout);
-          }
-
-        }                                                               // We've finished the sub file writing and closed and renamed the file.
-
-//---------- We're finished or we've given up.  Either way record the new state and elapsed time ----------
-
-        subm->udp_at_end_write = UDP_added_to_buff;                     // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we finish processing this sub for writing
-
-        clock_gettime( CLOCK_REALTIME, &ended_sub_write_time);
-
-        subm->msec_took = ( ( ended_sub_write_time.tv_sec - started_sub_write_time.tv_sec ) * 1000 ) + ( ( ended_sub_write_time.tv_nsec - started_sub_write_time.tv_nsec ) / 1000000 ); // msec since this sub started
-
-/*
-        if ( ( subm->udp_count == 1280512 ) && ( subm->udp_dummy == 1310720 ) ) {                                               //count=1280512,dummy=1310720 is a perfect storm.  No missing packets, but I couldn't find any packets at all.
-          printf ( "my_MandC_meta array\n" );
-          for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {
-            printf( "loop=%d,rf=%d,startb=%d,order=%d\n", loop, my_MandC_meta[loop].rf_input, my_MandC_meta[loop].start_byte, my_MandC_meta[loop].seen_order );
-          }
-
-          printf ( "rf2ndx array (non-zero entries). Seen=%d\n", subm->rf_seen );
-          for ( loop = 0 ; loop < 65536 ; loop++ ) {
-            if ( subm->rf2ndx[ loop ] != 0 ) {
-              printf ( "loop=%d,ndx=%d\n", loop, subm->rf2ndx[ loop ] );
-            }
+            sub_result = SLOT_WRITE_RENAME_FAILED;                              // This was our last check.  If we got to here, the sub file rename failed, so prepare to write that to monitoring system
+            log_error("Final rename failed.") ;                                 // but if that fails, I'm not really sure what to do.  Let's just note it and see if it ever happens
           }
         }
-*/
 
+        // We're finished or we've given up.  Either way record the new state and elapsed time.
+        subm->udp_at_end_write = state->UDP_added_to_buff;                     // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we finish processing this sub for writing
+        clock_gettime(CLOCK_REALTIME, &ended_sub_write_time);
+        subm->msec_took = ( ( ended_sub_write_time.tv_sec - started_sub_write_time.tv_sec ) * 1000 ) + ( ( ended_sub_write_time.tv_nsec - started_sub_write_time.tv_nsec ) / 1000000 ); // msec since this sub started
         subm->state = sub_result;                                       // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-        printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
-            (int64_t)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
-
-        fflush(stdout);
+        log_debug("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d",
+            (int64_t)(ended_sub_write_time.tv_sec - state->GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
 
       }
+    } // Jump up to the top and look again (as well as checking if we need to shut down)
 
-    }                                                                   // Jump up to the top and look again (as well as checking if we need to shut down)
-
-//---------- We've been told to shut down ----------
-
-    printf( "Exiting makesub\n" );
-
+    log_info( "Shutting down..." );
     pthread_exit(NULL);
 }

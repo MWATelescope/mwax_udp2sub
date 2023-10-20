@@ -3,9 +3,12 @@
 #include <stdint.h>
 #include <dirent.h>
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include <time.h>
 #include <stdbool.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include <fitsio.h>
 
@@ -13,53 +16,38 @@
 
 const char *TAG = "metafits-task";
 
+#define FITS_CHECK(OP) if (status) { log_error("Query operation on FITS file failed: %s", OP); fits_report_error(stderr, status); status = 0; }
 
 void *task_add_metafits(void *args) {
     app_state_t *state = (app_state_t *)args;
     instance_config_t conf = state->cfg;
 
+    log_info("Initialising...");
+
     DIR *dir;
     struct dirent *dp;
     int len_filename;
-
     char metafits_file[300];                                            // The metafits file name
-
     int64_t bcsf_obsid;                                                   // 'best candidate so far' for the metafits file
     int64_t mf_obsid;
-
     int loop;
     int subobs_ready2write;
     int meta_result;                                                    // Temp storage for the result before we write it back to the array for others to see.  Once we do that, we can't change our mind.
     bool go4meta;
-
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
-
     struct timespec started_meta_write_time;
     struct timespec ended_meta_write_time;
-
-    //static long double mm2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of millimetres to samples.
-
     static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) * (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) ) ); // Frequently used during fitting parabola
-//    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
     static long double one_over_num_blocks = ( ((long double) 1L) / (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) );      // Frequently used during fitting parabola
-
-    //static long double conv2int32 = (long double)( 1 << 10 ) * (long double) 1000000L;                     // Frequently used conversion factor to microsamples and making use of extra bits in int32
     static long double res_max = (long double) 2L;                                                      // Frequently used in range checking. Largest allowed residual.
     static long double res_min = (long double) -2L;                                                     // Frequently used in range checking. Smallest allowed residual.
-
     long double d2r = M_PIl / 180.0L;					// Calculate a long double conversion factor from degrees to radians (we'll use it a few times)
     long double SinAlt, CosAlt, SinAz, CosAz;				// temporary variables for storing the trig results we need to do delay tracking
-
     long double a,b,c;							// coefficients of the delay fitting parabola
-
     fitsfile *fptr;                                                                             // FITS file pointer, defined in fitsio.h
-//    char card[FLEN_CARD];                                                                     // Standard string lengths defined in fitsio.h
     int status;                                                                                 // CFITSIO status value MUST be initialized to zero!
     int hdupos;
-//    int single, nkeys, ii;
-
     char channels_ascii[200];                                           // Space to read in the metafits channel string before we parse it into individual channels
-//    int len;
     unsigned int ch_index;                                              // assorted variables to assist parsing the channel ascii csv into something useful like an array of ints
     char* token;
     char* saveptr;
@@ -69,9 +57,6 @@ void *task_add_metafits(void *args) {
 
 //---------------- Main loop to live in until shutdown -------------------
 
-    fprintf(stderr, "add_meta_fits started\n");
-    fflush(stderr);
-
     clock_gettime( CLOCK_REALTIME, &ended_meta_write_time);             // Fake the ending time for the last metafits file ('cos like there wasn't one y'know but the logging will expect something)
 
     while (!state->terminate) {                                                // If we're not supposed to shut down, let's find something to do
@@ -80,16 +65,11 @@ void *task_add_metafits(void *args) {
 
       subobs_ready2write = -1;                                          // Start by assuming there's nothing to do
 
-      for ( loop = 0 ; loop < 4 ; loop++ ) {                            // Look through all four subobs meta arrays
-
-        if ( ( state->sub[loop].state == 1 ) && ( state->sub[loop].meta_done == 0 ) ) {       // If this sub is ready to have M&C metadata added
-
+      for(loop = 0; loop < 4; loop++) {                            // Look through all four subobs meta arrays
+        if ( ( state->sub[loop].state == SLOT_ACTIVE ) && ( state->sub[loop].meta_done == SLOT_META_ABSENT ) ) {       // If this sub is ready to have M&C metadata added
           if ( subobs_ready2write == -1 ) {                             // check if we've already found a different one to do and if we haven't
-
             subobs_ready2write = loop;                                  // then mark this one as the best so far
-
           } else {                                                      // otherwise we need to work out
-
             if ( state->sub[subobs_ready2write].subobs > state->sub[loop].subobs ) {  // if that other one was for a later sub than this one
               subobs_ready2write = loop;                                // in which case, mark this one as the best so far
             }
@@ -110,29 +90,20 @@ void *task_add_metafits(void *args) {
 //      updated with tile flags from pointing errors by the M&C
 
         clock_gettime( CLOCK_REALTIME, &started_meta_write_time);       // Record the start time before we actually get started.  The clock starts ticking from here.
-
         subm = &state->sub[subobs_ready2write];                                // Temporary pointer to our sub's metadata array
-
         subm->meta_msec_wait = ( ( started_meta_write_time.tv_sec - ended_meta_write_time.tv_sec ) * 1000 ) + ( ( started_meta_write_time.tv_nsec - ended_meta_write_time.tv_nsec ) / 1000000 );        // msec since the last metafits processed
-
-        subm->meta_done = 2;                                            // Record that we're working on this one!
-
-        meta_result = 5;                                                // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
-
+        subm->meta_done = SLOT_META_IN_PROGRESS;                        // Record that we're working on this one!
+        meta_result = SLOT_META_FAILED;                                                // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
         go4meta = true;                                                 // All good so far
 
 //---------- Look in the metafits directory and find the most applicable metafits file ----------
 
-        if ( go4meta ) {                                                                                // If everything is okay so far, enter the next block of code
+        if(go4meta) {                                                                                // If everything is okay so far, enter the next block of code
           go4meta = false;                                                                              // but go back to assuming a failure unless we succeed in the next bit
-
           bcsf_obsid = 0;                                                                               // 'best candidate so far' is very bad indeed (ie non-existent)
-
           dir = opendir( conf.metafits_dir );                                                           // Open up the directory where metafits live
-
           if ( dir == NULL ) {                                                                          // If the directory doesn't exist we must be running on an incorrectly set up server
-            printf( "Fatal error: Directory %s does not exist\n", conf.metafits_dir );
-            fflush(stdout);
+            log_error("FATAL: Directory %s does not exist", conf.metafits_dir);
             state->terminate = true;                                                                           // Tell every thread to close down
             pthread_exit(NULL);                                                                         // and close down ourselves.
           }
@@ -140,19 +111,12 @@ void *task_add_metafits(void *args) {
           while ( (dp=readdir(dir)) != NULL) {                                                          // Read an entry and while there are still directory entries to look at
             if ( ( dp->d_type == DT_REG ) && ( dp->d_name[0] != '.' ) ) {                                       // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
               if ( ( (len_filename = strlen( dp->d_name )) >= 15) && ( strcmp( &dp->d_name[len_filename-14], "_metafits.fits" ) == 0 ) ) {           // If the filename is at least 15 characters long and the last 14 characters are "_metafits.fits"
-
                 mf_obsid = strtoll( dp->d_name,0,0 );                                                   // Get the obsid from the name
-
                 if ( mf_obsid <= subm->subobs ) {                                                       // if the obsid is less than or the same as our subobs id, then it's a candidate for the one we need
-
                   if ( mf_obsid > bcsf_obsid ) {                                                        // If this metafits is later than the 'best candidate so far'?
                     bcsf_obsid = mf_obsid;                                                              // that would make it our new best candidate so far
-
-//printf( "best metafits #%lld\n", bcsf_obsid );
-
                     go4meta = true;                                                                     // We've found at least one file worth looking at.
                   }
-
                 }
               }
             }
@@ -164,24 +128,12 @@ void *task_add_metafits(void *args) {
 
         if ( go4meta ) {                                                                                // If everything is okay so far, enter the next block of code
           go4meta = false;                                                                              // but go back to assuming a failure unless we succeed in the next bit
-
           sprintf( metafits_file, "%s/%lld_metafits.fits", conf.metafits_dir, bcsf_obsid );             // Construct the full file name including path
-
-//    printf( "About to read: %s/%lld_metafits.fits\n", conf.metafits_dir, bcsf_obsid );
-
           status = 0;                                                                                   // CFITSIO status value MUST be initialized to zero!
 
           if ( !fits_open_file( &fptr, metafits_file, READONLY, &status ) ) {                           // Try to open the file and if it works
-
             fits_get_hdu_num( fptr, &hdupos );                                                          // get the current HDU position
-
-//            fits_get_hdrspace(fptr, &nkeys, NULL, &status);                                           // get # of keywords
-//            printf("Header listing for HDU #%d:\n", hdupos);
-//            for (ii = 1; ii <= nkeys; ii++) {                                                         // Read and print each keywords
-//              fits_read_record(fptr, ii, card, &status);
-//              printf("%s\n", card);
-//            }
-//            printf("END\n\n");                                                                        // terminate listing with END
+                                                                                                        // terminate listing with END
 
 //---------- Pull out the header info we need.  Format must be one of TSTRING, TLOGICAL (== int), TBYTE, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, TLONGLONG, TFLOAT, TDOUBLE ----------
 
@@ -316,15 +268,6 @@ if (state->debug_mode || state->force_geo_delays) subm->GEODEL = 3;
             subm->COARSE_CHAN = subm->CHANNELS[ conf.coarse_chan - 1 ];                                 // conf.coarse_chan numbers are 1 to 24 inclusive, but the array index is 0 to 23 incl.
 
             if ( subm->COARSE_CHAN == 0 ) printf ( "Failed to parse valid coarse channel\n" );          // Check we found something plausible
-
-/*
-fits_read_string_key( fptr, "CHANNELS", 1, 190, channels_ascii, &len, NULL, &status );  // First read the metafits line and its 'CONTINUE' lines into a string
-printf( "'%s' parses into ", channels_ascii );
-for (int i = 0; i < 24; ++i) {
-  printf( "%d,", subm->CHANNELS[i] );
-}
-printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan );
-*/
 
 //---------- Hopefully we did that okay, although we better check during debugging that it handles the reversing above channel 128 correctly ----------
 
@@ -494,12 +437,6 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
           fits_read_col( fptr, TINT, colnum, loop+1, felem, 16, 0, subm->rf_inp[ metafits2sub_order[loop] ].Delays, &anynulls, &status );
         }
 
-//---------- Read and write the 'VCSOrder' field --------
-//
-//        fits_get_colnum( fptr, CASEINSEN, "VCSOrder", &colnum, &status );
-//        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-//        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].VCSOrder = cfitsio_floats[loop];            // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-//
 //---------- Read and write the 'Flavors' field --------
 
         fits_get_colnum( fptr, CASEINSEN, "Flavors", &colnum, &status );
@@ -604,10 +541,9 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
 
           fits_close_file(fptr, &status);
           if (status) {
-            fprintf(stderr, "Error when closing metafits file: ");
+            log_error("Failed to close metafits file: ");
             fits_report_error(stderr, status);                                                // print any error message
           }
-
         }			// End of 'go for meta' metafile reading
 
 //---------- Let's take all that metafits info, do some maths and other processing and get it ready to use, for when we need to actually write out the sub file
@@ -694,7 +630,7 @@ printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan 
           rfm->middle_total_delay = middle_sub_s;
           rfm->end_total_delay = end_sub_s;
           DEBUG_LOG("ws: %d, initial: %d, delta: %d, delta_delta: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
-          meta_result = 4;
+          meta_result = SLOT_META_DONE;
 
 //---------- Print out a bunch of debug info ----------
 
