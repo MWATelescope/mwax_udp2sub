@@ -2056,51 +2056,49 @@ void *makesub()
 
         if ( utc_start[8] == ' ' ) utc_start[8] = '0';
 
-        char* head_mask =
-          "HDR_SIZE %d\n"
-          "POPULATED 1\n"
-          "OBS_ID %d\n"
-          "SUBOBS_ID %d\n"
-          "MODE %s\n"
-          "UTC_START %s\n"
-          "OBS_OFFSET %lld\n"
-          "NBIT 8\n"
-          "NPOL 2\n"
-          "NTIMESAMPLES %lld\n"
-          "NINPUTS %d\n"
-          "NINPUTS_XGPU %d\n"
-          "APPLY_PATH_WEIGHTS 0\n"
-          "APPLY_PATH_DELAYS %d\n"
-          "APPLY_PATH_PHASE_OFFSETS %d\n"
-          "INT_TIME_MSEC %d\n"
-          "FSCRUNCH_FACTOR %d\n"
-          "APPLY_VIS_WEIGHTS 0\n"
-          "TRANSFER_SIZE %lld\n"
-          "PROJ_ID %s\n"
-          "EXPOSURE_SECS %d\n"
-          "COARSE_CHANNEL %d\n"
-          "CORR_COARSE_CHANNEL %d\n"
-          "SECS_PER_SUBOBS 8\n"
-          "UNIXTIME %d\n"
-          "UNIXTIME_MSEC 0\n"
-          "FINE_CHAN_WIDTH_HZ %d\n"
-          "NFINE_CHAN %d\n"
-          "BANDWIDTH_HZ %lld\n"
-          "SAMPLE_RATE %lld\n"
-          "MC_IP 0.0.0.0\n"
-          "MC_PORT 0\n"
-          "MC_SRC_IP 0.0.0.0\n"
-          "MWAX_U2S_VER " THISVER "-%d\n"
-          "IDX_PACKET_MAP %d+%d\n"
-          "IDX_METAFITS %d+%d\n"
-          "IDX_DELAY_TABLE %d+%d\n"
-          "IDX_MARGIN_DATA %d+%d\n"
-          "MWAX_SUB_VER 2\n"
-          ;
-
-        sprintf( sub_header, head_mask, SUBFILE_HEADER_SIZE, subm->GPSTIME, subm->subobs, subm->MODE, utc_start, obs_offset,
-              NTIMESAMPLES, subm->NINPUTS, ninputs_xgpu, subm->CABLEDEL || subm->GEODEL, subm->CABLEDEL || subm->GEODEL, subm->INTTIME_msec, (subm->FINECHAN_hz/ULTRAFINE_BW), transfer_size, subm->PROJECT, subm->EXPOSURE, subm->COARSE_CHAN,
-              conf.coarse_chan, subm->UNIXTIME, subm->FINECHAN_hz, (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz), COARSECHAN_BANDWIDTH, SAMPLES_PER_SEC, BUILD );
+        {
+            char *bp=sub_header;
+            char *ep=sub_header+SUBFILE_HEADER_SIZE;
+            bp+=snprintf(bp, ep-bp, "HDR_SIZE %d\n",                   SUBFILE_HEADER_SIZE);
+            bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
+            bp+=snprintf(bp, ep-bp, "OBS_ID %d\n",                     subm->GPSTIME);
+            bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
+            bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
+            bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
+            bp+=snprintf(bp, ep-bp, "OBS_OFFSET %lld\n",               obs_offset);
+            bp+=snprintf(bp, ep-bp, "NBIT 8\n");
+            bp+=snprintf(bp, ep-bp, "NPOL 2\n");
+            bp+=snprintf(bp, ep-bp, "NTIMESAMPLES %lld\n",             NTIMESAMPLES);
+            bp+=snprintf(bp, ep-bp, "NINPUTS %d\n",                    subm->NINPUTS);
+            bp+=snprintf(bp, ep-bp, "NINPUTS_XGPU %d\n",               ninputs_xgpu);
+            bp+=snprintf(bp, ep-bp, "APPLY_PATH_WEIGHTS 0\n");
+            bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
+            bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
+            bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
+            bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %d\n",            (subm->FINECHAN_hz/ULTRAFINE_BW));
+            bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
+            bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %lld\n",            transfer_size);
+            bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
+            bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
+            bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
+            bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
+            bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
+            bp+=snprintf(bp, ep-bp, "UNIXTIME %d\n",                   subm->UNIXTIME);
+            bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
+            bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
+            bp+=snprintf(bp, ep-bp, "NFINE_CHAN %d\n",                 (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
+            bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
+            bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
+            bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
+            bp+=snprintf(bp, ep-bp, "MC_PORT 0\n");
+            bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
+            bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
+            bp+=snprintf(bp, ep-bp, "IDX_PACKET_MAP %d+%d\n",          0, 0);  // TODO - compute correct values for these fields
+            bp+=snprintf(bp, ep-bp, "IDX_METAFITS %d+%d\n",            0, 0);
+            bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);
+            bp+=snprintf(bp, ep-bp, "IDX_MARGIN_DATA %d+%d\n",         0, 0);
+            bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
+        }
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
 
