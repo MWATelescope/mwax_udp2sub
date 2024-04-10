@@ -470,6 +470,7 @@ typedef struct subobs_udp_meta {                        // Structure format for 
     int CABLEDEL;
     int GEODEL;
     int CALIBDEL;
+    int DERIPPLE;
     char PROJECT[32];
     char MODE[32];
 
@@ -1316,6 +1317,12 @@ if (debug_mode || force_geo_delays) subm->GEODEL = 3;
               fflush(stdout);
             }
 
+            fits_read_key( fptr, TINT, "DERIPPLE", &(subm->DERIPPLE), NULL, &status ); // now a required field in metafits.. Later stages need to be more tolerant
+            if (status) {
+              printf ( "Failed to read deripple\n" );
+              fflush(stdout);
+            }
+            
 //---------- Get Project ID and Observing mode ----------
 
             fits_read_key( fptr, TSTRING, "PROJECT", &(subm->PROJECT), NULL, &status );
@@ -2059,9 +2066,9 @@ void *makesub()
         {
             char *bp=sub_header;
             char *ep=sub_header+SUBFILE_HEADER_SIZE;
-            bp+=snprintf(bp, ep-bp, "HDR_SIZE %d\n",                   SUBFILE_HEADER_SIZE);
+            bp+=snprintf(bp, ep-bp, "HDR_SIZE %lld\n",                 SUBFILE_HEADER_SIZE);
             bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
-            bp+=snprintf(bp, ep-bp, "OBS_ID %d\n",                     subm->GPSTIME);
+            bp+=snprintf(bp, ep-bp, "OBS_ID %lld\n",                   subm->GPSTIME);
             bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
             bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
             bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
@@ -2075,18 +2082,19 @@ void *makesub()
             bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
             bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
             bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
-            bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %d\n",            (subm->FINECHAN_hz/ULTRAFINE_BW));
+            bp+=snprintf(bp, ep-bp, "APPLY_COARSE_DERIPPLE %d\n",      subm->DERIPPLE);
+            bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %lld\n",          (subm->FINECHAN_hz/ULTRAFINE_BW));
             bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
-            bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %lld\n",            transfer_size);
+            bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %ld\n",             transfer_size);
             bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
             bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
             bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
             bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
             bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
-            bp+=snprintf(bp, ep-bp, "UNIXTIME %d\n",                   subm->UNIXTIME);
+            bp+=snprintf(bp, ep-bp, "UNIXTIME %lld\n",                 subm->UNIXTIME);
             bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
             bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
-            bp+=snprintf(bp, ep-bp, "NFINE_CHAN %d\n",                 (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
+            bp+=snprintf(bp, ep-bp, "NFINE_CHAN %lld\n",               (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
             bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
             bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
             bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
