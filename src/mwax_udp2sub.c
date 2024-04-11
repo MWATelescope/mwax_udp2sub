@@ -540,6 +540,7 @@ BOOL force_geo_delays = FALSE;                          // Always apply geometri
 
 typedef struct udp2sub_config {               // Structure for the configuration of each udp2sub instance.
 
+    // fields for this instance read from a line in the mwax_u2s config file, usually found at /vulcan/mwax_config/mwax_u2s.cfg
     int udp2sub_id;                           // Which correlator id number we are.  Probably from 01 to 26, at least initially.
     char hostname[64];                        // Host name is looked up against these strings to select the correct line of configuration settings
     int host_instance;                        // Is compared with a value that can be put on the command line for multiple copies per server
@@ -563,6 +564,10 @@ typedef struct udp2sub_config {               // Structure for the configuration
     int UDPport;                              // Multicast port address
     char monitor_if[20];                      // Local interface address for monitoring packets
 
+    // fields common to all u2s instances read from mwax.cfg, usually found at /vulcan/mwax_config/mwax.cfg
+    int tiles;
+    int xgpu_tiles;
+    int oversampling;
 } udp2sub_config_t ;
 
 //#pragma pack(pop)                               // Set the structure packing back to 'normal' whatever that is
@@ -574,34 +579,43 @@ udp2sub_config_t conf;                          // A place to store the configur
 // load_channel_map - Load config from a CSV file.
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
+int load_and_cr_terminate(const char *path, char **data) {
+    FILE *file;
+    size_t sz;
+    file = fopen(path, "r");
+    if(file == NULL) {
+        fprintf(stderr, "Error loading configuration. Unable to open %s\n", path);
+        return 1;
+    }
+    fseek(file, 0, SEEK_END);
+    sz = ftell(file);
+    rewind(file);
+    if(sz == -1) {
+        fprintf(stderr, "Error loading configuration. Failed to determine file size for %s\n", path);
+        return 2;
+    }
+    (*data) = malloc(sz + 1);
+    (*data)[sz] = '\n'; // Simplifies parsing slightly
+    if(fread((*data), 1, sz, file) != sz) {
+        fprintf(stderr, "Error loading configuration. Read error loading %s\n", path);
+        return 3;
+    }
+    fclose(file);
+    return 0;
+}
+
 int load_config_file(char *path, udp2sub_config_t **config_records) {
   fprintf(stderr, "Reading configuration from %s\n", path);
   // Read the whole input file into a buffer.
-  char *data, *datap;
-  FILE *file;
-  size_t sz;
-  file = fopen(path, "r");
-    if(file == NULL) {
-    fprintf(stderr, "Error loading configuration. Unable to open %s\n", path);
-    return 1;
+  char *data;
+  int err = load_and_cr_terminate(path, &data);
+  if (err>0) {
+      return err;
   }
-  fseek(file, 0, SEEK_END);
-  sz = ftell(file);
-  rewind(file);
-  if(sz == -1) {
-    fprintf(stderr, "Error loading configuration. Failed to determine file size for %s\n", path);
-    return 2;
-  }
-  data = datap = malloc(sz + 1);
-  data[sz] = '\n'; // Simplifies parsing slightly
-  if(fread(data, 1, sz, file) != sz) {
-    fprintf(stderr, "Error loading configuration. Read error loading %s\n", path);
-    return 3;
-  }
-  fclose(file);
 
+  char *datap = data;
   udp2sub_config_t *records;
-  int max_rows = sz / 28;                  // Minimum row size is 28, pre-allocate enough
+  int max_rows = strlen(datap) / 28;    // Minimum row size is 28, pre-allocate enough
   int row_sz = sizeof(udp2sub_config_t);   // room for the worst case and `realloc` later
   records = calloc(max_rows, row_sz);      // when the size is known.
 
@@ -624,7 +638,7 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
         if (end == NULL || *end != '\0') goto done;
         break;
       case 3:
-        records[row].UDP_num_slots = strtol(tok, &end, 10);
+        records[row].UDP_num_slots = strtol(tok, &end, 10);  // buffer size in bytes
         if (end == NULL || *end != '\0') goto done;
         break;
       case 4:
@@ -662,7 +676,7 @@ int load_config_file(char *path, udp2sub_config_t **config_records) {
         strcpy(records[row].local_if, tok);
         break;
       case 14:
-        records[row].coarse_chan = strtol(tok, &end, 10);
+        records[row].coarse_chan = strtol(tok, &end, 10);  /// channel index, is mapped to sky frequency number by the metafits
         if (end == NULL || *end != '\0') goto done;
         break;
       case 15:
@@ -697,8 +711,46 @@ done:
   return row + 1;
 }
 
+int load_mwax_config(char *path, udp2sub_config_t *cfg) {
+    fprintf(stderr, "Reading configuration from %s\n", path);
 
-void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_config_t *config ) {
+    char *data;
+    int err = load_and_cr_terminate(path, &data);
+    if (err>0) {
+        return err;
+    }
+    char *datap = data;
+    int section_is_mwax = 0;
+    while (datap) {
+        char *line = strsep(&datap, "\n");
+        char *sep;
+        if ((sep=strstr(line,"="))) {
+            char *name = line;
+            char *value = sep+1;
+            *sep--=0;
+            while(*sep==' ' && sep>name) *sep--=0;  //trim trailing spaces from name
+
+            if (section_is_mwax) {
+                if (!strcmp(name,"tiles"       )) { cfg->tiles = atoi(value);}
+                if (!strcmp(name,"xgpu_tiles"  )) { cfg->xgpu_tiles = atoi(value);}
+                if (!strcmp(name,"oversampling")) { cfg->oversampling = atoi(value);}
+            }
+        }
+        else if ((sep=strstr(line,"["))) {
+            sep++;
+            char *section=strsep(&sep,"]");
+            if(sep) {
+                //section found.
+                section_is_mwax = !strcmp(section, "mwax");
+            }
+        }
+    }
+    free(data);
+    return 0;
+}
+
+
+void read_config ( char *file, char *shared_file, char *us, int inst, int coarse_chan, udp2sub_config_t *config) {
 
     int num_instances = 0;                                      // Number of instance records loaded
     int instance_ndx = 0;                                       // Start out assuming we don't appear in the list
@@ -712,13 +764,14 @@ void read_config ( char *file, char *us, int inst, int coarse_chan, udp2sub_conf
     }
 
     for (int loop = 0 ; loop < num_instances; loop++ ) {        // Check through all possible configurations
-      if ( ( strcmp( available_config[loop].hostname, us ) == 0 ) && ( available_config[loop].host_instance == inst ) ) {
+      if ( ( strcmp(available_config[loop].hostname, us ) == 0 ) && (available_config[loop].host_instance == inst ) ) {
         instance_ndx = loop;                                    // if the edt card config matches the command line and the hostname matches
         break;                                                  // We don't need to keep looking
       }
     }
 
     *config = available_config[ instance_ndx ];                 // Copy the relevant line into the structure we were passed a pointer to
+    load_mwax_config(shared_file, config);
 
     if ( coarse_chan > 0 ) {                                    // If there is a coarse channel override on the command line
       config->coarse_chan = coarse_chan;                        // Force the coarse chan from 01 to 24 with that value
@@ -2472,9 +2525,10 @@ void sigusr1_handler(int signo)
 void usage(char *err)                           // Bad command line.  Report the supported usage.
 {
     printf( "%s", err );
-    printf("\n\n To run:        /home/mwa/udp2sub -f mwax.conf -i 1\n\n");
+    printf("\n\n To run:        /home/mwa/udp2sub -f mwax_u2s.conf -F mwax.conf -i 1\n\n");
 
-    printf("                    -f Configuration file to use for settings\n");
+    printf("                    -f Configuration file to use for u2s settings\n");
+    printf("                    -F Configuration file to use for shared settings\n");
     printf("                    -i Instance number on server, if multiple copies per server in use\n");
     printf("                    -c Coarse channel override\n");
     printf("                    -d Debug mode.  Write to .free files\n");
@@ -2613,6 +2667,7 @@ int main(int argc, char **argv)
     int instance = 0;                                           // Assume we're the first (or only) instance on this server
     int chan_override = 0;                                      // Assume we are going to use the default coarse channel for this instance
     char *conf_file = "/vulcan/mwax_config/mwax_u2s.cfg";       // Default configuration path
+    char *shared_conf_file = "/vulcan/mwax_config/mwax.cfg";    // Default shared configuration path
 
     uint32_t delaygen_obs_id = 0;     // Observation ID for delay generator
     uint32_t delaygen_subobs_idx = 0; // The n-th subobservation
@@ -2644,6 +2699,14 @@ int main(int argc, char **argv)
           --argc ;
           conf_file = argv[1];
           fprintf (stderr, "Config file to read = %s\n", conf_file );
+          fflush(stderr);
+          break ;
+
+          case 'F':
+          ++argv ;
+          --argc ;
+          shared_conf_file = argv[1];
+          fprintf (stderr, "Shared config file to read = %s\n", shared_conf_file);
           fflush(stderr);
           break ;
 
@@ -2703,7 +2766,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "Running udp2sub on %s.  ver " THISVER " Build %d\n", hostname, prog_build);
     fflush(stdout);
 
-    read_config( conf_file, hostname, instance, chan_override, &conf );         // Use the config file, the host name and the instance number (if there is one) to look up all our configuration and settings
+    read_config( conf_file, shared_conf_file, hostname, instance, chan_override, &conf);         // Use the config file, the host name and the instance number (if there is one) to look up all our configuration and settings
 
     if ( conf.udp2sub_id == 0 ) {                                       // If the lookup returned an id of 0, we don't have enough information to continue
       fprintf(stderr, "Hostname not found in configuration\n");
