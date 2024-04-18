@@ -267,13 +267,14 @@
 
 //---------------- and some new friends -------------------
 
+#define SUB_SLOTS 4
 #define MAX_INPUTS (544LL)
 #define UDP_PAYLOAD_SIZE (4096LL)
 
 #define LIGHTSPEED (299792458000.0L)
 
 #define SUBFILE_HEADER_SIZE (4096LL)
-#define SAMPLES_PER_SEC (1280000LL)
+#define SAMPLES_PER_SEC (conf.oversampling?1638400LL:1280000LL)
 #define COARSECHAN_BANDWIDTH (1280000LL)
 #define ULTRAFINE_BW (200ll)
 #define BLOCKS_PER_SUB (160LL)
@@ -307,21 +308,32 @@
 #define DEBUG_LOG(...)
 #endif
 
+#define MWA_PACKET_TYPE_HEADER       0x00 // 0x00 == Binary Header
+#define MWA_PACKET_TYPE_LEGACY       0x20 // 0x20 == Legacy Mode  2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format).
+#define MWA_PACKET_TYPE_OVERSAMPLING 0x30 // 0x30 == Oversampling Mode 2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format)
+
+// In legacy mode, there are 625 packets per second and 2048 samples per packet. This results in 1.28M samples per second.
+// In oversampling mode, there are 800 packets per second and 2048 samples per packet. This results in 1.6384M samples per second.
+
 //---------------- MWA external Structure definitions --------------------
 
 #pragma pack(push,1)                          // We're writing this header into all our packets, so we want/need to force the compiler not to add it's own idea of structure padding
 
 typedef struct mwa_udp_packet {               // Structure format for the MWA data packets
 
-    uint8_t packet_type;                      // Packet type (0x00 == Binary Header, 0x20 == 2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format)
+    uint8_t packet_type;                      // Packet type (cf MWA_PACKET_TYPE_* above)
     uint8_t freq_channel;                     // The current coarse channel frequency number [0 to 255 inclusive].  This number is available from the header, but repeated here to simplify archiving and monitoring multiple frequencies.
     uint16_t rf_input;                        // maps to tile/antenna and polarisation (LSB is 0 for X, 1 for Y)
+
     uint32_t GPS_time;                        // [second] GPS time of packet (bottom 32 bits only)
+
     uint16_t subsec_time;                     // count from 0 to PACKETS_PER_SEC - 1 (from header)  Typically PACKETS_PER_SEC is 625 in MWA
     uint8_t spare1;                           // spare padding byte.  Reserved for future use.
     uint8_t edt2udp_id;                       // Which edt2udp instance generated this packet and therefore a lookup to who to ask for a retransmission (0 implies no retransmission possible)
+
     uint16_t edt2udp_token;                   // value to pass back to edt2udp instance to help identify source packet.  A token's value is constant for a given source rf_input and freq_channel for entire sub-observation
     uint8_t spare2[2];                        // Spare bytes for future use
+
     uint16_t volts[2048];                     // 2048 complex voltage samples.  Each one is 8 bits real, followed by 8 bits imaginary but we'll treat them as a single 16 bit 'bit pattern'
 
 } mwa_udp_packet_t ;
@@ -341,9 +353,7 @@ typedef struct udp2sub_monitor {               // Health packet data
     // most advanced udp packet
     // Lowest remaining buffer left
     // Stats on lost packets
-    // mon->ignored_for_a_bad_type++;                          // Keep track for debugging of how many packets we've seen that we can't handle
     // mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
-    // mon->sub_meta_sleeps++;                                         // record we went to sleep
     // mon->sub_write_sleeps++;                                        // record we went to sleep
     // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 
@@ -487,7 +497,7 @@ typedef struct subobs_udp_meta {                        // Structure format for 
 
     uint16_t rf_seen;                                   // The number of different rf_input sources seen so far this sub observation
     uint16_t rf2ndx[65536];                             // A mapping from the rf_input value to what row in the pointer array its pointers are stored
-    char *udp_volts[MAX_INPUTS+1][UDP_PER_RF_PER_SUB];    // array of pointers to every udp packet's payload that may be needed for this sub-observation.  NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
+    char **udp_volts[MAX_INPUTS+1];                     // array of arrays of pointers to every udp packet's payload that may be needed for this sub-observation.  NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
 
     tile_meta_t rf_inp[MAX_INPUTS];                     // Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file, NOT the order udp packets were seen in.
 
@@ -958,7 +968,6 @@ void *UDP_parse()
 
 //---------------- Initialize and declare variables ------------------------
 
-    mwa_udp_packet_t *my_udp;                                           // Make a local pointer to the UDP packet we're working on.
 
     uint32_t last_good_packet_sub_time = 0;                             // What sub obs was the last packet (for caching)
     uint32_t subobs_mask = 0xFFFFFFF8;                                  // Mask to apply with '&' to get sub obs from GPS second
@@ -971,46 +980,34 @@ void *UDP_parse()
 
     subobs_udp_meta_t *this_sub = NULL;                                 // Pointer to the relevant one of the four subobs metadata arrays
 
-    int loop;
+    int expected_packet_type = conf.oversampling ? MWA_PACKET_TYPE_OVERSAMPLING : MWA_PACKET_TYPE_LEGACY;
 
 //---------------- Main loop to process incoming udp packets -------------------
 
     while (!terminate) {
 
-
-
       if ( UDP_removed_from_buff < UDP_added_to_buff ) {                // If there is at least one packet waiting to be processed
-
-        my_udp = &UDPbuf[ UDP_removed_from_buff % UDP_num_slots ];      // then this is a pointer to it.
+        mwa_udp_packet_t *my_udp;                                       // Make a local pointer to the UDP packet we're working on
+        my_udp = &UDPbuf[ UDP_removed_from_buff % UDP_num_slots ];      // and point to it.
 
 //---------- At this point in the loop, we are about to process the next arrived UDP packet, and it is located at my_udp ----------
 
-        if ( my_udp->packet_type == 0x20 ) {                            // If it's a real packet off the network with some fields in network order, they need to be converted to host order and have a few tweaks made before we can use the packet
-
+        if ( my_udp->packet_type == expected_packet_type ) {            // If it's a real packet off the network with some fields in network order, they need to be converted to host order and have a few tweaks made before we can use the packet
           my_udp->subsec_time = ntohs( my_udp->subsec_time );           // Convert subsec_time to a usable uint16_t which at this stage is still within a single second
           my_udp->GPS_time = ntohl( my_udp->GPS_time );                 // Convert GPS_time (bottom 32 bits only) to a usable uint32_t
-
-
-
           my_udp->rf_input = ntohs( my_udp->rf_input );                 // Convert rf_input to a usable uint16_t
           my_udp->edt2udp_token = ntohs( my_udp->edt2udp_token );       // Convert edt2udp_token to a usable uint16_t
-
                                                                         // the bottom three bits of the GPS_time is 'which second within the subobservation' this second is
           my_udp->subsec_time += ( (my_udp->GPS_time & 0b111) * SUBSECSPERSEC ) + 1;    // Change the subsec field to be the packet count within a whole subobs, not just this second.  was 0 to 624.  now 1 to 5000 inclusive. (0x21 packets can be 0 to 5001!)
 
           my_udp->packet_type = 0x21;                                   // Now change the packet type to a 0x21 to say it's similar to a 0x20 but in host byte order
 
-        } else {                                                        // If is wasn't a 0x20 packet, the only other packet we handle is a 0x21
-
-//---------- Not for us?
-
-          if ( my_udp->packet_type != 0x21 ) {                          // This packet is not a valid packet for us.
-//WIP            mon->ignored_for_a_bad_type++;                         // Keep track for debugging of how many packets we've seen that we can't handle
+        }                                                               // If is wasn't a 0x20 packet, the only other packet we handle is a 0x21
+        else if ( my_udp->packet_type != 0x21 ) {                       // This packet is not a valid packet for us.
             UDP_removed_from_buff++;                                    // Flag it as used and release the buffer slot.  We don't want to see it again.
             continue;                                                   // start the loop again
-          }
-
         }
+
 
 //---------- If this packet is for the same sub obs as the previous packet, we can assume a bunch of things haven't changed or rolled over, otherwise we have things to check
 
@@ -1039,7 +1036,7 @@ void *UDP_parse()
               start_window = end_window - 7;                            // then our new start window is the beginning second of the subobs for the packet we just saw.  (7 seconds because the second counts are inclusive).
             }
 
-            for ( loop = 0 ; loop < 4 ; loop++ ) {                                                      // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this may not be checked in time order of subobs
+            for ( int loop = 0 ; loop < SUB_SLOTS ; loop++ ) {                                                  // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this may not be checked in time order of subobs
               if ( ( sub[ loop ].subobs < start_window ) && ( sub[ loop ].state == 1 ) ) {              // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
                 if ( sub[ loop ].subobs == ( start_window - 8 ) ) {     // then if it's a very recent subobs (which is what we'd expect during normal operations)
                   sub[ loop ].state = 2;                                // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
@@ -1128,10 +1125,8 @@ void *UDP_parse()
 //---------- End of processing of this UDP packet ----------
 
       } else {                                                          //
-//WIP        mon->sub_meta_sleeps++;                                            // record we went to sleep
         usleep(10000);                                                  // Chill for a bit
       }
-
     }
 
 //---------- We've been told to shut down ----------
@@ -1178,7 +1173,7 @@ void add_meta_fits()
     struct timespec started_meta_write_time;
     struct timespec ended_meta_write_time;
 
-    static long double mm2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of millimetres to samples.
+    long double mm2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of millimetres to samples.
 
     static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) * (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) ) ); // Frequently used during fitting parabola
 //    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
@@ -1221,7 +1216,7 @@ void add_meta_fits()
 
       subobs_ready2write = -1;                                          // Start by assuming there's nothing to do
 
-      for ( loop = 0 ; loop < 4 ; loop++ ) {                            // Look through all four subobs meta arrays
+      for ( loop = 0 ; loop < SUB_SLOTS ; loop++ ) {                            // Look through all four subobs meta arrays
 
         if ( ( sub[loop].state == 1 ) && ( sub[loop].meta_done == 0 ) ) {       // If this sub is ready to have M&C metadata added
 
@@ -2768,6 +2763,7 @@ int main(int argc, char **argv)
 
     read_config( conf_file, shared_conf_file, hostname, instance, chan_override, &conf);         // Use the config file, the host name and the instance number (if there is one) to look up all our configuration and settings
 
+    printf("after read_config, UDP_PER_RF_PER_SUB = %lld\n", UDP_PER_RF_PER_SUB);
     if ( conf.udp2sub_id == 0 ) {                                       // If the lookup returned an id of 0, we don't have enough information to continue
       fprintf(stderr, "Hostname not found in configuration\n");
       fflush(stdout);
@@ -2830,11 +2826,21 @@ int main(int argc, char **argv)
 
 //---------------- Allocate the RAM we need for the subobs pointers and metadata and initialise it ------------------------
 
-    sub = calloc( 4, sizeof( subobs_udp_meta_t ) );                     // Make 4 slots to store the metadata against the maximum 4 subobs that can be open at one time
+    sub = calloc( SUB_SLOTS, sizeof( subobs_udp_meta_t ) );                     // Make 4 slots to store the metadata against the maximum 4 subobs that can be open at one time
     if ( sub == NULL ) {                                                // If that failed
       printf("sub calloc failed\n");                                    // log a message
       fflush(stdout);
       exit(EXIT_FAILURE);                                               // and give up!
+    }
+
+    for(int slot=0; slot<SUB_SLOTS; slot++) {
+        for(int input=0; input<MAX_INPUTS+1; input++) {
+            if (NULL == (sub[slot].udp_volts[input] = calloc(UDP_PER_RF_PER_SUB, sizeof(char *))) ) {
+                printf("packet payload pointer array calloc failed\n");                                    // log a message
+                fflush(stdout);
+                exit(EXIT_FAILURE);                                               // and give up!
+            }
+        }
     }
 
     blank_sub_line = calloc( SUB_LINE_SIZE, sizeof(char));              // Make ourselves a buffer of zeros that's the size of an empty line.  We'll use this for padding out sub file
@@ -2909,7 +2915,7 @@ int main(int argc, char **argv)
 
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm looking at
 
-    for ( int loop = 0 ; loop < 4 ; loop++ ) {                          // Look through all four subobs meta arrays
+    for ( int loop = 0 ; loop < SUB_SLOTS ; loop++ ) {                          // Look through all four subobs meta arrays
       subm = &sub[ loop ];                                              // Temporary pointer to our sub's metadata array
 
       printf( "slot=%d,so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n",
