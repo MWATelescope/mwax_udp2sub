@@ -1146,6 +1146,16 @@ long double get_path_difference(long double north, long double east, long double
   return ACr;
 }
 
+int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, char *verbose_keyname, void *value, char *comm, int *status)
+{
+  int res=fits_read_key(fptr,datatype,keyname,value,comm,status);
+  if (*status) {
+    printf ( "Failed to read %s\n", keyname);
+    fflush(stdout);
+  }
+  return res;
+}
+
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // Add metafits info - Every time a new 8 second block of udp packets starts, try to find the metafits data applicable and write it into the subm structure
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1176,10 +1186,8 @@ void add_meta_fits()
     long double mm2s_conv_factor = (long double) SAMPLES_PER_SEC / (long double) LIGHTSPEED;      // Frequently used conversion factor of delay in units of millimetres to samples.
 
     static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) * (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) ) ); // Frequently used during fitting parabola
-//    static long double two_over_num_blocks_sqrd = ( ((long double) 2L) / ( (long double) (1600L) * (long double) (1600L) ) ); // Frequently used during fitting parabola
     static long double one_over_num_blocks = ( ((long double) 1L) / (long double) (BLOCKS_PER_SUB*FFT_PER_BLOCK) );      // Frequently used during fitting parabola
 
-    //static long double conv2int32 = (long double)( 1 << 10 ) * (long double) 1000000L;                     // Frequently used conversion factor to microsamples and making use of extra bits in int32
     static long double res_max = (long double) 2L;                                                      // Frequently used in range checking. Largest allowed residual.
     static long double res_min = (long double) -2L;                                                     // Frequently used in range checking. Smallest allowed residual.
 
@@ -1189,17 +1197,9 @@ void add_meta_fits()
     long double a,b,c;							// coefficients of the delay fitting parabola
 
     fitsfile *fptr;                                                                             // FITS file pointer, defined in fitsio.h
-//    char card[FLEN_CARD];                                                                     // Standard string lengths defined in fitsio.h
     int status;                                                                                 // CFITSIO status value MUST be initialized to zero!
     int hdupos;
-//    int single, nkeys, ii;
 
-    char channels_ascii[200];                                           // Space to read in the metafits channel string before we parse it into individual channels
-//    int len;
-    unsigned int ch_index;                                              // assorted variables to assist parsing the channel ascii csv into something useful like an array of ints
-    char* token;
-    char* saveptr;
-    char* ptr;
     int temp_CHANNELS[24];
     int course_swap_index;
 
@@ -1311,121 +1311,46 @@ void add_meta_fits()
 
             fits_get_hdu_num( fptr, &hdupos );                                                          // get the current HDU position
 
-//            fits_get_hdrspace(fptr, &nkeys, NULL, &status);                                           // get # of keywords
-//            printf("Header listing for HDU #%d:\n", hdupos);
-//            for (ii = 1; ii <= nkeys; ii++) {                                                         // Read and print each keywords
-//              fits_read_record(fptr, ii, card, &status);
-//              printf("%s\n", card);
-//            }
-//            printf("END\n\n");                                                                        // terminate listing with END
+            fits_read_key_verbose(fptr, TLONGLONG, "GPSTIME", NULL, &(subm->GPSTIME), NULL, &status);               // Read the GPSTIME of the metafits observation (should be same as bcsf_obsid but read anyway)
+            fits_read_key_verbose(fptr, TINT, "EXPOSURE", NULL, &(subm->EXPOSURE), NULL, &status);                  // Read the EXPOSURE time from the metafits
+            fits_read_key_verbose(fptr, TSTRING, "FILENAME", "observation filename", &(subm->FILENAME), NULL, &status);               // WIP!!! SHould be changed to allow reading more than one line
+            fits_read_key_verbose(fptr, TINT, "CABLEDEL", NULL, &(subm->CABLEDEL), NULL, &status);                  // Read the CABLEDEL field. 0=Don't apply. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+            if (debug_mode || force_cable_delays) subm->CABLEDEL = 1;
 
-//---------- Pull out the header info we need.  Format must be one of TSTRING, TLOGICAL (== int), TBYTE, TSHORT, TUSHORT, TINT, TUINT, TLONG, TULONG, TLONGLONG, TFLOAT, TDOUBLE ----------
+            fits_read_key_verbose(fptr, TINT, "GEODEL", NULL, &(subm->GEODEL), NULL, &status);			// Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+            if (debug_mode || force_geo_delays) subm->GEODEL = 3;
 
-            fits_read_key( fptr, TLONGLONG, "GPSTIME", &(subm->GPSTIME), NULL, &status );               // Read the GPSTIME of the metafits observation (should be same as bcsf_obsid but read anyway)
-            if (status) {
-              printf ( "Failed to read GPSTIME\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TINT, "EXPOSURE", &(subm->EXPOSURE), NULL, &status );                  // Read the EXPOSURE time from the metafits
-            if (status) {
-              printf ( "Failed to read Exposure\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TSTRING, "FILENAME", &(subm->FILENAME), NULL, &status );               // WIP!!! SHould be changed to allow reading more than one line
-            if (status) {
-              printf ( "Failed to read observation filename\n" );
-              fflush(stdout);
-            }
-
-//---------- Pull out delay handling settings ----------
-
-            fits_read_key( fptr, TINT, "CABLEDEL", &(subm->CABLEDEL), NULL, &status );                  // Read the CABLEDEL field. 0=Don't apply. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-
-if (debug_mode || force_cable_delays) subm->CABLEDEL = 1;
-
-            if (status) {
-              printf ( "Failed to read CABLEDEL\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TINT, "GEODEL", &(subm->GEODEL), NULL, &status );			// Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
-
-if (debug_mode || force_geo_delays) subm->GEODEL = 3;
-
-            if (status) {
-              printf ( "Failed to read GEODEL\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TINT, "CALIBDEL", &(subm->CALIBDEL), NULL, &status );                  // Read the CALIBDEL field. (0=Don't apply calibration solutions. 1=Do apply)
-            if (status) {
-              printf ( "Failed to read CALIBDEL\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TINT, "DERIPPLE", &(subm->DERIPPLE), NULL, &status ); // now a required field in metafits.. Later stages need to be more tolerant
-            if (status) {
-              printf ( "Failed to read deripple\n" );
-              fflush(stdout);
-            }
-            
-//---------- Get Project ID and Observing mode ----------
-
-            fits_read_key( fptr, TSTRING, "PROJECT", &(subm->PROJECT), NULL, &status );
-            if (status) {
-              printf ( "Failed to read project id\n" );
-              fflush(stdout);
-            }
-
-            fits_read_key( fptr, TSTRING, "MODE", &(subm->MODE), NULL, &status );
-            if (status) {
-              printf ( "Failed to read mode\n" );
-              fflush(stdout);
-            }
-
-//if ( strstr( subm->FILENAME, "mwax_vcs" ) != NULL ) {   // If the FILENAME (obsname) contains mwax_vcs then
-//  strcpy( subm->MODE, "VOLTAGE_START" );                // change mode to VOLTAGE_START
-//}
-
-//if ( strstr( subm->FILENAME, "mwax_corr" ) != NULL ) {  // If the FILENAME (obsname) contains mwax_corr then
-//  strcpy( subm->MODE, "HW_LFILES" );                    // change mode to HW_LFILES
-//}
+            fits_read_key_verbose(fptr, TINT, "CALIBDEL", NULL, &(subm->CALIBDEL), NULL, &status);          // Read the CALIBDEL field. (0=Don't apply calibration solutions. 1=Do apply)
+            fits_read_key_verbose(fptr, TINT, "DERIPPLE", NULL, &(subm->DERIPPLE), NULL, &status);          // now a required field in metafits.. Later stages need to be more tolerant
+            fits_read_key_verbose(fptr, TSTRING, "PROJECT", "project id", &(subm->PROJECT), NULL, &status); // project id
+            fits_read_key_verbose(fptr, TSTRING, "MODE", NULL, &(subm->MODE), NULL, &status);               // observing mode
 
             if ( (subm->GPSTIME + (INT64)subm->EXPOSURE - 1) < (INT64)subm->subobs ) {                  // If the last observation has expired. (-1 because inclusive)
               strcpy( subm->MODE, "NO_CAPTURE" );                                                       // then change the mode to NO_CAPTURE
             }
 
 //---------- Parsing the sky frequency (coarse) channel is a whole job in itself! ----------
+            {
+              char* token;
+              char* saveptr;
+              fits_read_key_longstr(fptr, "CHANNELS", &saveptr, NULL, &status);
+              if (status) {
+                printf ( "Failed to read Channels\n" );
+                fflush(stdout);
+              }
 
-            fits_read_key_longstr(fptr, "CHANNELS", &saveptr, NULL, &status);
-            if (status) {
-              printf ( "Failed to read Channels\n" );
-              fflush(stdout);
-            }
+              int ch_index = 0;    // Start at channel number zero (of 0 to 23)
+              char *ptr = saveptr;   // Get a temp copy (but only of the pointer. NOT THE STRING!) that we can update as we step though the channels in the csv list
 
-            strcpy(channels_ascii, saveptr);
-            free(saveptr);
+              while ( ( token = strsep(&ptr, "," )) && ( ch_index < 24 ) ) {        // Get a pointer to the next number and assuming there *is* one and we still want more
+                temp_CHANNELS[ch_index++] = atoi(token);                                // turn it into an int and remember it (although it isn't sorted yet)
+              }
+              free(saveptr);
 
-//            fits_read_string_key( fptr, "CHANNELS", 1, 190, channels_ascii, &len, NULL, &status );    // First read the metafits line and its 'CONTINUE' lines into a string
-//            ffgsky( fptr, "CHANNELS", 1, 190, channels_ascii, &len, NULL, &status );  // First read the metafits line and its 'CONTINUE' lines into a string
-//            if (status) {
-//              printf ( "Failed to read Channels\n" );
-//            }
-
-            ch_index = 0;                                                                               // Start at channel number zero (of 0 to 23)
-            saveptr = NULL;
-            ptr = channels_ascii;                                                                       // Get a temp copy (but only of the pointer. NOT THE STRING!) that we can update as we step though the channels in the csv list
-
-            while ( ( ( token = strtok_r(ptr, ",", &saveptr) ) != NULL ) & ( ch_index < 24 ) ) {        // Get a pointer to the next number and assuming there *is* one and we still want more
-              temp_CHANNELS[ch_index++] = atoi(token);                                                  // turn it into an int and remember it (although it isn't sorted yet)
-              ptr = saveptr;                                                                            // Not convinced this line is needed, but it was there in 'recombine' so I left it
-            }
-
-            if (ch_index != 24) {
-              printf("Did not find 24 channels in metafits file.\n");
-              fflush(stdout);
+              if (ch_index != 24) {
+                printf("Did not find 24 channels in metafits file.\n");
+                fflush(stdout);
+              }
             }
 
 // From the RRI user manual:
@@ -1459,39 +1384,18 @@ if (debug_mode || force_geo_delays) subm->GEODEL = 3;
 
             if ( subm->COARSE_CHAN == 0 ) printf ( "Failed to parse valid coarse channel\n" );          // Check we found something plausible
 
-/*
-fits_read_string_key( fptr, "CHANNELS", 1, 190, channels_ascii, &len, NULL, &status );  // First read the metafits line and its 'CONTINUE' lines into a string
-printf( "'%s' parses into ", channels_ascii );
-for (int i = 0; i < 24; ++i) {
-  printf( "%d,", subm->CHANNELS[i] );
-}
-printf( " to give %d for coarse chan %d\n", subm->COARSE_CHAN, conf.coarse_chan );
-*/
-
 //---------- Hopefully we did that okay, although we better check during debugging that it handles the reversing above channel 128 correctly ----------
 
-            fits_read_key( fptr, TFLOAT, "FINECHAN", &(subm->FINECHAN), NULL, &status );
-            if (status) {
-              printf ( "Failed to read FineChan\n" );
-              fflush(stdout);
-            }
+            fits_read_key_verbose(fptr, TFLOAT, "FINECHAN", NULL, &(subm->FINECHAN), NULL, &status);
             subm->FINECHAN_hz = (int) (subm->FINECHAN * 1000.0);                                        // We'd prefer the fine channel width in Hz rather than kHz.
 
-            fits_read_key( fptr, TFLOAT, "INTTIME", &(subm->INTTIME), NULL, &status );
-            if (status) {
-              printf ( "Failed to read Integration Time\n" );
-              fflush(stdout);
-            }
+            fits_read_key_verbose(fptr, TFLOAT, "INTTIME", "Integration Time", &(subm->INTTIME), NULL, &status);
             subm->INTTIME_msec = (int) (subm->INTTIME * 1000.0);                                        // We'd prefer the integration time in msecs rather than seconds.
 
-            fits_read_key( fptr, TINT, "NINPUTS", &(subm->NINPUTS), NULL, &status );
-            if (status) {
-              printf ( "Failed to read NINPUTS\n" );
-              fflush(stdout);
-            }
+            fits_read_key_verbose(fptr, TINT, "NINPUTS", NULL, &(subm->NINPUTS), NULL, &status);
             if ( subm->NINPUTS > MAX_INPUTS ) subm->NINPUTS = MAX_INPUTS;				// Don't allow more inputs than MAX_INPUTS (probably die reading the tile list anyway)
 
-            fits_read_key( fptr, TLONGLONG, "UNIXTIME", &(subm->UNIXTIME), NULL, &status );
+            fits_read_key_verbose(fptr, TLONGLONG, "UNIXTIME", NULL, &(subm->UNIXTIME), NULL, &status);
             FITS_CHECK("read_key UNIXTIME");
 //---------- We now have everything we need from the 1st HDU ----------
 
