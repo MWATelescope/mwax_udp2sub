@@ -1912,14 +1912,6 @@ void *makesub()
     char *source_ptr;
     int bytes2copy;
 
-    char months[] = "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec "; // Needed for date to ASCII conversion
-    char utc_start[200];                                                // Needed for date to ASCII conversion
-    int mnth;                                                           // The current month
-    char srch[4] = {0,0,0,0};                                           // Really only need the last byte set to a null as a string terminator for 3 character months
-
-    long int my_time;
-    char* t;                                                            // General pointer to char but used for ctime output
-
     struct timespec started_sub_write_time;
     struct timespec ended_sub_write_time;
 
@@ -2005,15 +1997,9 @@ void *makesub()
 
         INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
 
-        my_time = subm->UNIXTIME - (8 * 60 * 60);                                                                       // Adjust for time zone AWST (Perth time to GMT)
-        t = ctime( &my_time );
-
-        memcpy ( srch,&t[4],3 );
-        mnth = ( strstr ( months, srch ) - months )/4 + 1;
-
-        sprintf( utc_start, "%.4s-%02d-%.2s-%.8s", &t[20], mnth, &t[8], &t[11] );                                       // Shift all the silly date stuff into a string
-
-        if ( utc_start[8] == ' ' ) utc_start[8] = '0';
+        char utc_start[30];
+        time_t observation_start=subm->UNIXTIME;
+        strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
 
         {
             char *bp=sub_header;
