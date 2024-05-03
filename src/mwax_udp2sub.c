@@ -230,7 +230,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <pthread.h>
-#include <stdlib.h> 
+#include <stdlib.h>
 #include <signal.h>
 #include <string.h>
 #include <math.h>
@@ -1098,7 +1098,7 @@ void *UDP_parse()
           this_sub->rf2ndx[ my_udp->rf_input ] = this_sub->rf_seen;     // and assign that number for this rf input's metadata index
           rf_ndx = this_sub->rf_seen;                                   // and get the correct index for this packet too because we'll need that
         }       // WIP Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
-      
+
         this_sub->udp_volts[ rf_ndx ][ my_udp->subsec_time ] = (char *) my_udp->volts;          // This is an important line so lets unpack what it does and why.
         // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in which they were seen on
         // the incoming packet stream) and the packet count (0 to 5001) inside the subobs. By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
@@ -1703,10 +1703,10 @@ altaz[0].Dist_km
             delay_so_far_start_mm  += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
             delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
             delay_so_far_end_mm    += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
-            
+
             DEBUG_LOG("dels: %Lf, delm: %Lf, del: %Lf, ",
               get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az),
-              get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az), 
+              get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az),
               get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az));
 
             //delay_so_far_start_mm -=  ( ( rfm->North * subm->altaz[ 0 ].CosAzCosAlt ) +				// add the component of delay caused by the 'north' location of its position
@@ -1848,12 +1848,10 @@ void *add_meta_fits_thread() {
 
 void *makesub()
 {
-
     printf("Makesub started\n");
     fflush(stdout);
 
 //--------------- Set CPU affinity ---------------
-
     printf("Set process makesub cpu affinity returned %d\n", set_cpu_affinity ( conf.cpu_mask_makesub ) );
     fflush(stdout);
 
@@ -1873,7 +1871,7 @@ void *makesub()
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
-    char *block1_add;							// The address where the 1st data block is.  That is *after* the 4k header *and* after the 0th block which is metadata
+    char *block1_add;							                        // The address where the 1st data block is.  That is *after* the 4k header *and* after the 0th block which is metadata
 
     int ext_shm_fd;                                                     // File descriptor for the shmem block
 
@@ -1888,29 +1886,28 @@ void *makesub()
 
     mwa_udp_packet_t dummy_udp={0};                                     // Make a dummy udp packet full of zeros and NULLs.  We'll use this to stand in for every missing packet!
     void *dummy_volt_ptr = &dummy_udp.volts[0];                         // and we'll remember where we can find UDP_PAYLOAD_SIZE (4096LL) worth of zeros
-    UINT8 *dummy_map; /* = calloc(active_rf_inputs*UDP_PER_RF_PER_SUB/8, 1); */ // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
-    
+    UINT8 *dummy_map;                                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
+
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
-    tile_meta_t *rfm;							// Pointer to the tile metadata for the tile I'm working on
-    
+    tile_meta_t *rfm;					                            	// Pointer to the tile metadata for the tile I'm working on
+
     int block;                                                          // loop variable
     int MandC_rf;                                                       // loop variable
-    int ninputs_pad;							// The number of inputs in the sub file padded out with any needed dummy tiles (used to be a thing but isn't any more)
+    int ninputs_pad;				                            		// The number of inputs in the sub file padded out with any needed dummy tiles (used to be a thing but isn't any more)
     int ninputs_xgpu;                                                   // The number of inputs in the sub file but padded out to whatever number xgpu needs to deal with them in (not actually padded until done by Ian's code later)
 
     MandC_meta_t my_MandC_meta[MAX_INPUTS];                             // Working copies of the changeable metafits/metabin data for this subobs
     MandC_meta_t *my_MandC;                                             // Make a temporary pointer to the M&C metadata for one rf input
 
-    delay_table_entry_t block_0_working;				// Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
-    double w_initial_delay;						// tile's initial fractional delay (times 2^20) working copy
-    double w_delta_delay;						// tile's initial fractional delay step (like its 1st deriviative)
+    delay_table_entry_t block_0_working;                                // Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
+    double w_initial_delay;					                            // tile's initial fractional delay (times 2^20) working copy
+    double w_delta_delay;					                            // tile's initial fractional delay step (like its 1st derivative)
 
     int source_packet;                                                  // which packet (of 5002) contains the first byte of data we need
     int source_offset;                                                  // what is the offset in that packet of the first byte we need
     int source_remain;                                                  // How much data is left from that offset to the end of the udp packet
 
-    char *source_ptr;
-    int bytes2copy;
+    char *sp;
 
     struct timespec started_sub_write_time;
     struct timespec ended_sub_write_time;
@@ -1920,7 +1917,7 @@ void *makesub()
     printf("Makesub entering main loop\n");
     fflush(stdout);
 
-    clock_gettime( CLOCK_REALTIME, &ended_sub_write_time);              // Fake the ending time for the last sub file ('cos like there wasn't one y'know but the logging will expect something)
+    clock_gettime( CLOCK_REALTIME, &ended_sub_write_time);  // Fake the ending time for the last sub file ('cos like there wasn't one y'know but the logging will expect something)
 
     while (!terminate) {                                                // If we're not supposed to shut down, let's find something to do
 
@@ -1945,32 +1942,23 @@ void *makesub()
         }
       }                                                                 // We left this loop with an index to the best sub to write or a -1 if none available.
 
-//---------- if we don't have one ----------
-
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
         usleep(20000);                                                  // Chillax for a bit.
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
 
-//---------- but if we *do* have a sub file ready to write out ----------
-
         clock_gettime( CLOCK_REALTIME, &started_sub_write_time);        // Record the start time before we actually get started.  The clock starts ticking from here.
-
         subm = &sub[subobs_ready2write];                                // Temporary pointer to our sub's metadata array
 
         subm->msec_wait = ( ( started_sub_write_time.tv_sec - ended_sub_write_time.tv_sec ) * 1000 ) + ( ( started_sub_write_time.tv_nsec - ended_sub_write_time.tv_nsec ) / 1000000 ); // msec since the last sub ending
-
         subm->udp_at_start_write = UDP_added_to_buff;                   // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
-
         subm->state = 3;                                                // Record that we're working on this one!
-
         sub_result = 5;                                                 // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
 //---------- Do some last-minute metafits work to prepare ----------
 
         go4sub = TRUE;                                                                                                  // Say it all looks okay so far
 
-        ninputs_pad = subm->NINPUTS;									                                                               		// We don't pad .sub files any more so these two variables are the same
-        
+        ninputs_pad = subm->NINPUTS;									                                                // We don't pad .sub files any more so these two variables are the same
         ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);                                                                 // Get this from 'ninputs' rounded up to multiples of 32
 
         transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_pad );                                     // Should be 5275648000 for 256T in 160+1 blocks
@@ -2142,11 +2130,11 @@ void *makesub()
             block_0_working.ws_delay_applied = rfm->ws_delay;				// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
 
             w_initial_delay = rfm->initial_delay;				// Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
-            w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
+            w_delta_delay = rfm->delta_delay;					// Copy the tile's initial fractional delay step (like its 1st derivative) to a working copy we can update as we step through the delays
 
             block_0_working.initial_delay = w_initial_delay;			// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
-            block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
-            block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
+            block_0_working.delta_delay = w_delta_delay;			// Copy the tile's initial fractional delay step (like its 1st derivative) to the structure we're about to write to the 0th block
+            block_0_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd derivative) to the structure we're about to write to the 0th block
             block_0_working.start_total_delay = rfm->start_total_delay;
             block_0_working.middle_total_delay = rfm->middle_total_delay;
             block_0_working.end_total_delay = rfm->end_total_delay;
@@ -2171,10 +2159,7 @@ void *makesub()
 
 //---------- Write out the dummy map ----------
           uint32_t dummy_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
-	        DEBUG_LOG("UDP Packet Map at 0x%08llx (len=%ld)\n", 
-    	 		  (UINT64) dummy_map - (UINT64) ext_shm_buf, 
-	 	    	  dummy_map_len);
-          
+
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
             uint16_t row = subm->rf2ndx[rfm->rf_input];
@@ -2198,63 +2183,49 @@ void *makesub()
  * only ever stored in the second - but we still need that first packet in case we later want to shift
  * in samples, going the other way.
  */
-          uint32_t block0_margin_len = 0;
           uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
-          //uint8_t *block0_margin_start = block0_margin_dst;
-          bytes2copy = UDP_PAYLOAD_SIZE;
+
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
 
-            source_ptr = subm->udp_volts[my_MandC->seen_order][0];
-            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
-            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+            sp =  subm->udp_volts[my_MandC->seen_order][0];
+            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-            source_ptr = subm->udp_volts[my_MandC->seen_order][1];
-            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
-            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+            sp = subm->udp_volts[my_MandC->seen_order][1];
+            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-2];
-            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
-            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
+            sp = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 2];
+            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-            source_ptr = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB-1];
-            if ( source_ptr == NULL ) source_ptr = dummy_volt_ptr;
-            block0_margin_dst = mempcpy( block0_margin_dst, source_ptr, bytes2copy );
-
-            block0_margin_len += bytes2copy * 4;
+            sp = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 1];
+            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
           }
-          DEBUG_LOG("UDP margin packets at 0x%08llx (len=%d)\n", 
-	 		      (UINT64) block0_margin_start - (UINT64) ext_shm_buf, 
-	    		  block0_margin_len);
-          fflush(stdout);
-
 
 //---------- Write out the voltage data blocks ----------
 
           for ( block = 1; block <= BLOCKS_PER_SUB; block++ ) {                 // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
-
             for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {          // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.  This is likely to be similar to the list we actually saw, but may not be identical!
-
               my_MandC = &my_MandC_meta[MandC_rf];                              // Make a temporary pointer to the M&C metadata for this rf input.  NB these are sorted in order they need to be written out as opposed to the order the packets arrived.
 
               left_this_line = SUB_LINE_SIZE;
 
               while ( left_this_line > 0 ) {                                    // Keep going until we've finished writing out a whole line of the sub file
+                int bytes2copy;
 
-                source_packet = ( my_MandC->start_byte / UDP_PAYLOAD_SIZE );    // Initially the udp payload size is a power of 2 so this could be done faster with a bit shift, but what would happen if the packet size changed?
-                source_offset = ( my_MandC->start_byte % UDP_PAYLOAD_SIZE );    // Initially the udp payload size is a power of 2 so this could be done faster with a bit mask, but what would happen if the packet size changed?
-                source_remain = ( UDP_PAYLOAD_SIZE - source_offset );           // How much of the packet is left in bytes?  It should be an even number and at least 2 or I have a bug in the logic or code
+                source_packet = my_MandC->start_byte / UDP_PAYLOAD_SIZE;
+                source_offset = my_MandC->start_byte % UDP_PAYLOAD_SIZE;
+                source_remain = UDP_PAYLOAD_SIZE - source_offset;               // How much of the packet is left in bytes?  It should be an even number and at least 2 or I have a bug in the logic or code
 
-                source_ptr = subm->udp_volts[my_MandC->seen_order][source_packet];      // Pick up the pointer to the udp volt data we need (assuming we ever saw it arrive)
-                if ( source_ptr == NULL ) {                                             // but if it never arrived
-                  source_ptr = dummy_volt_ptr;                                          // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
+                sp = subm->udp_volts[my_MandC->seen_order][source_packet];      // Pick up the pointer to the udp volt data we need (assuming we ever saw it arrive)
+                if (sp == NULL ) {                                             // but if it never arrived
+                  sp = dummy_volt_ptr;                                          // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
                   subm->udp_dummy++;                                                    // The number of dummy packets we needed to insert to pad things out. Make a note for reporting and debug purposes
                   monitor.udp_dummy++;
                 }
 
                 bytes2copy = ( (source_remain < left_this_line) ? source_remain : left_this_line );             // Get the minimum of the remaining length of the udp volt payload or the length of line left to populate
 
-                dest = mempcpy( dest, source_ptr + source_offset, bytes2copy );         // Do the memory copy from the udp payload to the sub file and update the destination pointer
+                dest = mempcpy(dest, sp + source_offset, bytes2copy );         // Do the memory copy from the udp payload to the sub file and update the destination pointer
 
                 left_this_line -= bytes2copy;                                           // Keep up to date with the remaining amount of work needed on this line
                 my_MandC->start_byte += bytes2copy;                                     // and where we are up to in reading them
@@ -2289,37 +2260,17 @@ void *makesub()
 
         subm->msec_took = ( ( ended_sub_write_time.tv_sec - started_sub_write_time.tv_sec ) * 1000 ) + ( ( ended_sub_write_time.tv_nsec - started_sub_write_time.tv_nsec ) / 1000000 ); // msec since this sub started
 
-/*
-        if ( ( subm->udp_count == 1280512 ) && ( subm->udp_dummy == 1310720 ) ) {                                               //count=1280512,dummy=1310720 is a perfect storm.  No missing packets, but I couldn't find any packets at all.
-          printf ( "my_MandC_meta array\n" );
-          for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {
-            printf( "loop=%d,rf=%d,startb=%d,order=%d\n", loop, my_MandC_meta[loop].rf_input, my_MandC_meta[loop].start_byte, my_MandC_meta[loop].seen_order );
-          }
-
-          printf ( "rf2ndx array (non-zero entries). Seen=%d\n", subm->rf_seen );
-          for ( loop = 0 ; loop < 65536 ; loop++ ) {
-            if ( subm->rf2ndx[ loop ] != 0 ) {
-              printf ( "loop=%d,ndx=%d\n", loop, subm->rf2ndx[ loop ] );
-            }
-          }
-        }
-*/
-
         subm->state = sub_result;                                       // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
         printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
             (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
 
         fflush(stdout);
-
       }
-
     }                                                                   // Jump up to the top and look again (as well as checking if we need to shut down)
 
 //---------- We've been told to shut down ----------
-
     printf( "Exiting makesub\n" );
-
     pthread_exit(NULL);
 }
 
@@ -2431,7 +2382,7 @@ void usage(char *err)                           // Bad command line.  Report the
  */
 int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   fprintf(stderr, "entering delay generator mode\n");
-  
+
   subobs_udp_meta_t *subm = &sub[0];
   uint32_t subobs_start = obs_id + subobs_idx * 8;
   sub[0].state = 1;
@@ -2483,56 +2434,56 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   double w_delta_delay;
 
   /// Copied and pasted from `makesub`:
-          for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
+  for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
 
-            rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
+    rfm = &subm->rf_inp[ MandC_rf ];					                // Get a pointer for this tile's metadata
 
-            dt_entry_working.rf_input = rfm->rf_input;			              	// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
-            dt_entry_working.ws_delay_applied = rfm->ws_delay;	       			// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
-            w_initial_delay = rfm->initial_delay;				                    // Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
-            w_delta_delay = rfm->delta_delay;				                      	// Copy the tile's initial fractional delay step (like its 1st deriviative) to a working copy we can update as we step through the delays 
+    dt_entry_working.rf_input = rfm->rf_input;			              	// Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
+    dt_entry_working.ws_delay_applied = rfm->ws_delay;	       			// Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+    w_initial_delay = rfm->initial_delay;				                // Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
+    w_delta_delay = rfm->delta_delay;				                    // Copy the tile's initial fractional delay step (like its 1st derivative) to a working copy we can update as we step through the delays
 
-            dt_entry_working.initial_delay = w_initial_delay;		           	// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
-            dt_entry_working.delta_delay = w_delta_delay;			              // Copy the tile's initial fractional delay step (like its 1st deriviative) to the structure we're about to write to the 0th block
-            dt_entry_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd deriviative) to the structure we're about to write to the 0th block
-            dt_entry_working.num_pointings = 1;				                    	// Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
+    dt_entry_working.initial_delay = w_initial_delay;		           	// Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
+    dt_entry_working.delta_delay = w_delta_delay;			            // Copy the tile's initial fractional delay step (like its 1st derivative) to the structure we're about to write to the 0th block
+    dt_entry_working.delta_delta_delay = rfm->delta_delta_delay;		// Copy the tile's fractional delay step's step (like its 2nd derivative) to the structure we're about to write to the 0th block
+    dt_entry_working.num_pointings = 1;				                    // Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
 
-            for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {	    	// populate the fractional delay lookup table for this tile (one for each 5ms)
-              dt_entry_working.frac_delay[ loop ] = w_initial_delay;	      // Rounding and everything was all included when we did the original maths in the other thread
-              w_initial_delay += w_delta_delay;				                      // update our *TEMP* copies as we cycle through
-              w_delta_delay += dt_entry_working.delta_delta_delay;	       	// and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
-            }
+    for ( int loop = 0; loop < POINTINGS_PER_SUB; loop++ ) {	    	// populate the fractional delay lookup table for this tile (one for each 5ms)
+      dt_entry_working.frac_delay[ loop ] = w_initial_delay;	        // Rounding and everything was all included when we did the original maths in the other thread
+      w_initial_delay += w_delta_delay;				                    // update our *TEMP* copies as we cycle through
+      w_delta_delay += dt_entry_working.delta_delta_delay;	       	    // and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
+    }
 
-            //dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
-            printf("%d,%d,%.*f,%.*f,%.*f,%.*f,%.*f,%.*f,%d,%d,", 
-              
-              rfm->rf_input,
-              rfm->ws_delay, 
-              DECIMAL_DIG, 
-              rfm->start_total_delay, 
-              DECIMAL_DIG, 
-              rfm->middle_total_delay, 
-              DECIMAL_DIG, 
-              rfm->end_total_delay, 
-              DECIMAL_DIG, 
-              rfm->initial_delay, 
-              DECIMAL_DIG, 
-              rfm->delta_delay, 
-              DECIMAL_DIG,
-              rfm->delta_delta_delay,
-              1,
-              0);
-            for ( int loop = 0; loop < POINTINGS_PER_SUB-1; loop++ ) {
-              printf("%.*f,", DECIMAL_DIG, dt_entry_working.frac_delay[loop]);
-            }
-            printf("%.*f\n", DECIMAL_DIG, dt_entry_working.frac_delay[POINTINGS_PER_SUB-1]);
-            memset(&dt_entry_working, 0, sizeof(delay_table_entry_t));
-          }
+    //dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
+    printf("%d,%d,%.*f,%.*f,%.*f,%.*f,%.*f,%.*f,%d,%d,",
+
+           rfm->rf_input,
+           rfm->ws_delay,
+           DECIMAL_DIG,
+           rfm->start_total_delay,
+           DECIMAL_DIG,
+           rfm->middle_total_delay,
+           DECIMAL_DIG,
+           rfm->end_total_delay,
+           DECIMAL_DIG,
+           rfm->initial_delay,
+           DECIMAL_DIG,
+           rfm->delta_delay,
+           DECIMAL_DIG,
+           rfm->delta_delta_delay,
+           1,
+           0);
+    for ( int loop = 0; loop < POINTINGS_PER_SUB-1; loop++ ) {
+      printf("%.*f,", DECIMAL_DIG, dt_entry_working.frac_delay[loop]);
+    }
+    printf("%.*f\n", DECIMAL_DIG, dt_entry_working.frac_delay[POINTINGS_PER_SUB-1]);
+    memset(&dt_entry_working, 0, sizeof(delay_table_entry_t));
+  }
 
 
   //for(int i=0; i<sub[0].NINPUTS; i++) {
    // rfm = &sub[0].rf_inp[i];
-    
+
  // }
   //printf("%d", rfm->
   fflush(stdout);
