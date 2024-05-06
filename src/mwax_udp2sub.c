@@ -1060,7 +1060,17 @@ void *UDP_parse()
             slot_ndx = ( my_udp->GPS_time >> 3 ) & 0b11;                // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us our index into the subobs metadata array
 
             if ( sub[ slot_ndx ].state >= 4 ) {                         // If the state is a 4 or 5 or higher, then it's free for reuse, but someone needs to wipe the contents.  I guess that 'someone' means me!
+              subobs_udp_meta_t *ts = &sub[slot_ndx];
+
+              static char **voltage_save[MAX_INPUTS+1];
+              for(int i=0;i<MAX_INPUTS+1;i++) {
+                voltage_save[i] = ts->udp_volts[i];
+              }
               memset( &sub[ slot_ndx ], 0, sizeof( subobs_udp_meta_t ));        // Among other things, like wiping the array of pointers back to NULL, this memset should set the value of 'state' back to 0.
+              for(int i=0;i<MAX_INPUTS+1;i++) {
+                ts->udp_volts[i]=voltage_save[i];
+                memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB*sizeof(char*));
+              }
             }
 
             if ( sub[ slot_ndx ].state != 0 ) {                         // If state isn't 0 now, then it's bad.  We have a transaction to store and the subobs it belongs to can't be set up because its slot is still in use by an earlier subobs
