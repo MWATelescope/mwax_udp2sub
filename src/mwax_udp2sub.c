@@ -5,8 +5,10 @@
 //            LAW Luke Williams luke.a.williams@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 87
-#define THISVER "2.09"
+#define BUILD 88
+#define THISVER "2.10"
+//
+// 2.10-088     2024-05-07 CJP  determine oversampling from mwax.cfg, pass through deripple, set packet_map offset in header.
 //
 // 2.09-087     2022-11-10 LAW  Factor out `reallocarray`.
 //
