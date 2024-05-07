@@ -288,6 +288,7 @@
 
 #define NTIMESAMPLES ((SAMPLES_PER_SEC * 8LL) / BLOCKS_PER_SUB)
 
+// samples per second * eight seconds * (one byte each for real and imaginary components)
 #define UDP_PER_RF_PER_SUB ( ((SAMPLES_PER_SEC * 8LL * 2LL) / UDP_PAYLOAD_SIZE) + 2 )
 #define SUBSECSPERSEC ( (SAMPLES_PER_SEC * 2LL)/ UDP_PAYLOAD_SIZE )
 #define SUBSECSPERSUB ( SUBSECSPERSEC * 8LL )
@@ -1107,7 +1108,7 @@ void *UDP_parse()
           this_sub->rf_seen++;                                          // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
           this_sub->rf2ndx[ my_udp->rf_input ] = this_sub->rf_seen;     // and assign that number for this rf input's metadata index
           rf_ndx = this_sub->rf_seen;                                   // and get the correct index for this packet too because we'll need that
-        }       // WIP Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
+        }       // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
 
         this_sub->udp_volts[ rf_ndx ][ my_udp->subsec_time ] = (char *) my_udp->volts;          // This is an important line so lets unpack what it does and why.
         // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in which they were seen on
@@ -1896,7 +1897,6 @@ void *makesub()
 
     mwa_udp_packet_t dummy_udp={0};                                     // Make a dummy udp packet full of zeros and NULLs.  We'll use this to stand in for every missing packet!
     void *dummy_volt_ptr = &dummy_udp.volts[0];                         // and we'll remember where we can find UDP_PAYLOAD_SIZE (4096LL) worth of zeros
-    UINT8 *dummy_map;                                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
 
     subobs_udp_meta_t *subm;                                            // pointer to the sub metadata array I'm working on
     tile_meta_t *rfm;					                            	// Pointer to the tile metadata for the tile I'm working on
@@ -1993,55 +1993,60 @@ void *makesub()
 
         memset( sub_header, 0, SUBFILE_HEADER_SIZE );                                                                   // Pre fill with null chars just to ensure we don't leave junk anywhere in the header
 
-        INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
 
-        char utc_start[30];
-        time_t observation_start=subm->UNIXTIME;
-        strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
+        uint32_t packet_map_offset = sizeof(block_0_working) * ninputs_pad;   // ideally we should just calculate this where we write out the packet map
+        // but then we'd need to move the header-write to the end of makesub()
+        // and I don't want to take that step just yet.  Asserting for now.
+        uint32_t packet_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
 
         {
-            char *bp=sub_header;
-            char *ep=sub_header+SUBFILE_HEADER_SIZE;
-            bp+=snprintf(bp, ep-bp, "HDR_SIZE %lld\n",                 SUBFILE_HEADER_SIZE);
-            bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
-            bp+=snprintf(bp, ep-bp, "OBS_ID %lld\n",                   subm->GPSTIME);
-            bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
-            bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
-            bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
-            bp+=snprintf(bp, ep-bp, "OBS_OFFSET %lld\n",               obs_offset);
-            bp+=snprintf(bp, ep-bp, "NBIT 8\n");
-            bp+=snprintf(bp, ep-bp, "NPOL 2\n");
-            bp+=snprintf(bp, ep-bp, "NTIMESAMPLES %lld\n",             NTIMESAMPLES);
-            bp+=snprintf(bp, ep-bp, "NINPUTS %d\n",                    subm->NINPUTS);
-            bp+=snprintf(bp, ep-bp, "NINPUTS_XGPU %d\n",               ninputs_xgpu);
-            bp+=snprintf(bp, ep-bp, "APPLY_PATH_WEIGHTS 0\n");
-            bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
-            bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
-            bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
-            bp+=snprintf(bp, ep-bp, "APPLY_COARSE_DERIPPLE %d\n",      subm->DERIPPLE);
-            bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %lld\n",          (subm->FINECHAN_hz/ULTRAFINE_BW));
-            bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
-            bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %ld\n",             transfer_size);
-            bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
-            bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
-            bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
-            bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
-            bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
-            bp+=snprintf(bp, ep-bp, "UNIXTIME %lld\n",                 subm->UNIXTIME);
-            bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
-            bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
-            bp+=snprintf(bp, ep-bp, "NFINE_CHAN %lld\n",               (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
-            bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
-            bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
-            bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
-            bp+=snprintf(bp, ep-bp, "MC_PORT 0\n");
-            bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
-            bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
-            bp+=snprintf(bp, ep-bp, "IDX_PACKET_MAP %d+%d\n",          0, 0);  // TODO - compute correct values for these fields
-            bp+=snprintf(bp, ep-bp, "IDX_METAFITS %d+%d\n",            0, 0);
-            bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);
-            bp+=snprintf(bp, ep-bp, "IDX_MARGIN_DATA %d+%d\n",         0, 0);
-            bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
+          INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
+          char utc_start[30];
+          time_t observation_start=subm->UNIXTIME;
+          strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
+
+          char *bp=sub_header;
+          char *ep=sub_header+SUBFILE_HEADER_SIZE;
+          bp+=snprintf(bp, ep-bp, "HDR_SIZE %lld\n",                 SUBFILE_HEADER_SIZE);
+          bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
+          bp+=snprintf(bp, ep-bp, "OBS_ID %lld\n",                   subm->GPSTIME);
+          bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
+          bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
+          bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
+          bp+=snprintf(bp, ep-bp, "OBS_OFFSET %lld\n",               obs_offset);
+          bp+=snprintf(bp, ep-bp, "NBIT 8\n");
+          bp+=snprintf(bp, ep-bp, "NPOL 2\n");
+          bp+=snprintf(bp, ep-bp, "NTIMESAMPLES %lld\n",             NTIMESAMPLES);
+          bp+=snprintf(bp, ep-bp, "NINPUTS %d\n",                    subm->NINPUTS);
+          bp+=snprintf(bp, ep-bp, "NINPUTS_XGPU %d\n",               ninputs_xgpu);
+          bp+=snprintf(bp, ep-bp, "APPLY_PATH_WEIGHTS 0\n");
+          bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
+          bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
+          bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
+          bp+=snprintf(bp, ep-bp, "APPLY_COARSE_DERIPPLE %d\n",      subm->DERIPPLE);
+          bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %lld\n",          (subm->FINECHAN_hz/ULTRAFINE_BW));
+          bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
+          bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %ld\n",             transfer_size);
+          bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
+          bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
+          bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
+          bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
+          bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
+          bp+=snprintf(bp, ep-bp, "UNIXTIME %lld\n",                 subm->UNIXTIME);
+          bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
+          bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
+          bp+=snprintf(bp, ep-bp, "NFINE_CHAN %lld\n",               (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
+          bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
+          bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
+          bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
+          bp+=snprintf(bp, ep-bp, "MC_PORT 0\n");
+          bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
+          bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
+          bp+=snprintf(bp, ep-bp, "IDX_PACKET_MAP %d+%d\n",          packet_map_offset, packet_map_len);
+          bp+=snprintf(bp, ep-bp, "IDX_METAFITS %d+%d\n",            0, 0);  // TODO - compute correct values for these fields
+          bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);
+          bp+=snprintf(bp, ep-bp, "IDX_MARGIN_DATA %d+%d\n",         0, 0);
+          bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
         }
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
@@ -2127,6 +2132,7 @@ void *makesub()
           dest = ext_shm_buf;                                                   // we'll be trying to write to this block of RAM in strict address order, starting at the beginning (ie ext_shm_buf)
 
           dest = mempcpy( dest, sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
+          char *block0_add = dest;
 
           block1_add = dest + ( ninputs_pad * SUB_LINE_SIZE );			// Work out where we need to be when we write out the 1st block (ie after the 0th block). This makes it easy for us to 'pad out' the 0th block to a full block size.
 
@@ -2159,16 +2165,21 @@ void *makesub()
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
-          dummy_map = (UINT8*) dest;
+          UINT8 *packet_map = (UINT8*) dest;                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
 
-          // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
+          if (packet_map_offset != (UINT8 *)packet_map - (UINT8 *) block0_add) {
+            printf("incorrect packet map offset. %d!=%ld\n", packet_map_offset, (UINT8 *) packet_map - (UINT8 *) ext_shm_buf);
+            fflush(stdout);
+            // TODO should abort here
+          }
+
+            // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
           // 'block1_add points to the address at the beginning of block 1.  The remainder of block 0 needs to be null filled
 
           memset( dest, 0, block1_add - dest );					// Write out a bunch of nulls to line us up with the first voltage block (ie block 1)
           dest = block1_add;							// And set our write pointer to the beginning of block 1
 
 //---------- Write out the dummy map ----------
-          uint32_t dummy_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
@@ -2183,7 +2194,7 @@ void *makesub()
                            | (packets[t+6] != NULL) << 2
                            | (packets[t+7] != NULL) << 1
                            | (packets[t+8] != NULL);
-              dummy_map[(MandC_rf * (UDP_PER_RF_PER_SUB-2) + t)/ 8] = bitmap;
+              packet_map[(MandC_rf * (UDP_PER_RF_PER_SUB-2) + t)/ 8] = bitmap;
             }
           }
 
@@ -2193,7 +2204,7 @@ void *makesub()
  * only ever stored in the second - but we still need that first packet in case we later want to shift
  * in samples, going the other way.
  */
-          uint8_t *block0_margin_dst = dummy_map + dummy_map_len;
+          uint8_t *block0_margin_dst = packet_map + packet_map_len;
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
