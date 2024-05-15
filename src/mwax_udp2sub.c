@@ -2045,8 +2045,7 @@ void *makesub()
           bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
           bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
           bp+=snprintf(bp, ep-bp, "IDX_PACKET_MAP %d+%d\n",          packet_map_offset, packet_map_len);
-          bp+=snprintf(bp, ep-bp, "IDX_METAFITS %d+%d\n",            0, 0);  // TODO - compute correct values for these fields
-          bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);
+          bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);  // TODO - compute correct values for these fields
           bp+=snprintf(bp, ep-bp, "IDX_MARGIN_DATA %d+%d\n",         0, 0);
           bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
         }
