@@ -524,6 +524,7 @@ typedef struct MandC_meta {                             // Structure format for 
 #define CLOSEDOWN (0xFFFFFFFF)
 
 volatile BOOL terminate = FALSE;                        // Global request for everyone to close down
+volatile BOOL UDP_recv_complete = FALSE;                // UDP_recv has closed down successfully.
 
 volatile INT64 UDP_added_to_buff = 0;                   // Total number of packets received and placed in the buffer.  If it overflows we are in trouble and need a restart.
 volatile INT64 UDP_removed_from_buff = 0;               // Total number of packets pulled from buffer and space freed up.  If it overflows we are in trouble and need a restart.
@@ -952,6 +953,7 @@ void *UDP_recv()
 
     printf( "Exiting UDP_recv\n");
     fflush(stdout);
+    UDP_recv_complete = TRUE;
     pthread_exit(NULL);
 }
 
@@ -2763,6 +2765,14 @@ int main(int argc, char **argv)
     printf("Master thread waiting for child threads to end.\n");
     fflush(stdout);
 
+    if (!UDP_recv_complete) {       // we might be stalled waiting on nonexistent packets
+      usleep(UDP_RECV_SHUTDOWN_TIMEOUT);              // so wait a moment and check again.
+    }
+    if (!UDP_recv_complete) {
+      printf("UDP recv failed to shutdown (possibly blocked waiting for packets). Cancelling the thread.\n");
+      fflush(stdout);
+      pthread_cancel(UDP_recv_pt);  // kill the thread, it's failing to shut down gracefully.
+    }
     pthread_join(UDP_recv_pt,NULL);
     printf("UDP_recv joined.\n");
     fflush(stdout);
