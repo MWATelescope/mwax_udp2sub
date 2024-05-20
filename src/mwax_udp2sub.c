@@ -1999,7 +1999,8 @@ void *makesub()
         uint32_t packet_map_offset = sizeof(block_0_working) * ninputs_pad;   // ideally we should just calculate this where we write out the packet map
         // but then we'd need to move the header-write to the end of makesub()
         // and I don't want to take that step just yet.  Asserting for now.
-        uint32_t packet_map_len = ninputs_pad * (UDP_PER_RF_PER_SUB-2)/8;
+        uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB-2+7)/8;     // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
+        uint32_t packet_map_len = ninputs_pad * packet_map_stride;
 
         {
           INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
@@ -2195,7 +2196,7 @@ void *makesub()
                            | (packets[t+6] != NULL) << 2
                            | (packets[t+7] != NULL) << 1
                            | (packets[t+8] != NULL);
-              packet_map[(MandC_rf * (UDP_PER_RF_PER_SUB-2) + t)/ 8] = bitmap;
+              packet_map[MandC_rf * packet_map_stride + t / 8] = bitmap;
             }
           }
 
