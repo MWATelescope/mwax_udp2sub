@@ -909,22 +909,33 @@ void *UDP_recv()
     UDP_first_empty = 0;                                                // The first of those is number zero
     struct mmsghdr *UDP_first_empty_ptr = &msgvecs[UDP_first_empty];    // Set our first empty pointer to the address of the 0th element in the array
 
+    // Note that msgvecs contains 2*UDP_num_slots entries, with the second half a duplicate of the first,
+    // so when we pass recvmmsg a pointer to somewhere in the first half it will wrap the destinations automagically.
+
     while (!terminate) {
 
       if ( UDP_slots_empty > 0 ) {                                              // There's room for at least 1 UDP packet to arrive!  We should go ask the OS for it.
 
-//if ( UDP_slots_empty > 16LL ) UDP_slots_empty = 16LL;
+        // on some runs where we were collecting around 140k packets per second (129 tiles, critically sampled)
+        //
+        // 88% of the calls to recvmmsg (64% of the data), we got a single packet back
+        // 99% of the calls to recvmmsg we got fewer than 16packets, 99.99% of the time fewer than 70.
+        // Occasionally we got 300+
+        //
+        // 65.00% of the data returned by recvmmsg in single packets
+        // 78.00% of the data returned by recvmmsg in groups of fewer than   3 packets
+        // 90.00% of the data returned by recvmmsg in groups of fewer than   7 packets
+        // 99.00% of the data returned by recvmmsg in groups of fewer than  44 packets
+        // 99.90% of the data returned by recvmmsg in groups of fewer than  88 packets
+        // 99.99% of the data returned by recvmmsg in groups of fewer than 128 packets
 
-        if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr, UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 )                              //
-          if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr, UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 )                            //
-            if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr, UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 )                          //
-              if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr, UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 )                        //
-                if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr , UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 ) continue;
+        if ( ( retval = recvmmsg( fd, UDP_first_empty_ptr, UDP_slots_empty, RECVMMSG_MODE, NULL ) ) == -1 ) continue;
 
         UDP_added_to_buff += retval;                                          // Add that to the number we've ever seen and placed in the buffer
 
       } else {
         Num_loops_when_full++;
+        usleep(1000);                                                  // we should chill for a moment rather than take 100% CPU waiting on someone else to consume packets
       }
 
       UDP_slots_empty = UDP_num_slots + UDP_removed_from_buff - UDP_added_to_buff;   // How many UDP slots are available for us to (ask to) read using the one recvmmsg() request?
