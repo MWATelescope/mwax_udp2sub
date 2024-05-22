@@ -292,7 +292,7 @@
 
 // samples per second * eight seconds * (one byte each for real and imaginary components)
 #define UDP_PER_RF_PER_SUB ( ((SAMPLES_PER_SEC * 8LL * 2LL) / UDP_PAYLOAD_SIZE) + 2 )
-#define SUBSECSPERSEC ( (SAMPLES_PER_SEC * 2LL)/ UDP_PAYLOAD_SIZE )
+#define SUBSECSPERSEC ( (SAMPLES_PER_SEC * 2LL)/ UDP_PAYLOAD_SIZE )    // 625/800, for critically sampled/oversampled
 #define SUBSECSPERSUB ( SUBSECSPERSEC * 8LL )
 
 //#define RECVMMSG_MODE ( MSG_DONTWAIT )
@@ -518,6 +518,13 @@ typedef struct MandC_meta {                             // Structure format for 
 
 } MandC_meta_t;
 
+
+// used to track sizes of sections in block0 of subfiles.
+typedef struct data_section  {
+    char *name;
+    int offset;
+    int length;
+} data_section;
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // These variables are shared by all threads.  "file scope"
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1873,6 +1880,9 @@ void *add_meta_fits_thread() {
 // makesub - Every time an 8 second block of udp packets is available, try to generate a sub files for the correlator
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
+void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, int ninputs_xgpu,
+                          const data_section *data_sections, int n_data_sections);
+
 void *makesub()
 {
     printf("Makesub started\n");
@@ -1898,7 +1908,6 @@ void *makesub()
 
     char *ext_shm_buf;                                                  // Pointer to the header of where all the external data is after the mmap
     char *dest;                                                         // Working copy of the pointer into shm
-    char *block1_add;							                        // The address where the 1st data block is.  That is *after* the 4k header *and* after the 0th block which is metadata
 
     int ext_shm_fd;                                                     // File descriptor for the shmem block
 
@@ -1952,15 +1961,10 @@ void *makesub()
       subobs_ready2write = -1;                                          // Start by assuming there's nothing to write out
 
       for ( loop = 0 ; loop < 4 ; loop++ ) {                            // Look through all four subobs meta arrays
-
         if ( sub[loop].state == 2  && sub[loop].meta_done == 4) {       // If this sub is ready to write out
-
           if ( subobs_ready2write == -1 ) {                             // check if we've already found a different one to write out and if we haven't
-
             subobs_ready2write = loop;                                  // then mark this one as the best so far
-
           } else {                                                      // otherwise we need to work out
-
             if ( sub[subobs_ready2write].subobs > sub[loop].subobs ) {  // if that other one was for a later sub than this one
               subobs_ready2write = loop;                                // in which case, mark this one as the best so far
             }
@@ -1973,26 +1977,26 @@ void *makesub()
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
 
         clock_gettime( CLOCK_REALTIME, &started_sub_write_time);        // Record the start time before we actually get started.  The clock starts ticking from here.
-        subm = &sub[subobs_ready2write];                                // Temporary pointer to our sub's metadata array
+        subm = &sub[subobs_ready2write];                                  // Temporary pointer to our sub's metadata array
 
         subm->msec_wait = ( ( started_sub_write_time.tv_sec - ended_sub_write_time.tv_sec ) * 1000 ) + ( ( started_sub_write_time.tv_nsec - ended_sub_write_time.tv_nsec ) / 1000000 ); // msec since the last sub ending
-        subm->udp_at_start_write = UDP_added_to_buff;                   // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
-        subm->state = 3;                                                // Record that we're working on this one!
-        sub_result = 5;                                                 // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
+        subm->udp_at_start_write = UDP_added_to_buff;                     // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
+        subm->state = 3;                                                  // Record that we're working on this one!
+        sub_result = 5;                                                   // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
 //---------- Do some last-minute metafits work to prepare ----------
 
-        go4sub = TRUE;                                                                                                  // Say it all looks okay so far
+        go4sub = TRUE;                                                    // Say it all looks okay so far
 
-        ninputs_pad = subm->NINPUTS;									                                                // We don't pad .sub files any more so these two variables are the same
-        ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);                                                                 // Get this from 'ninputs' rounded up to multiples of 32
+        ninputs_pad = subm->NINPUTS;								      // We don't pad .sub files any more so these two variables are the same
+        ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);                   // Get this from 'ninputs' rounded up to multiples of 32
 
-        transfer_size = ( ( SUB_LINE_SIZE * (BLOCKS_PER_SUB+1LL) ) * ninputs_pad );                                     // Should be 5275648000 for 256T in 160+1 blocks
-        desired_size = transfer_size + SUBFILE_HEADER_SIZE;                                                             // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
+        transfer_size = SUB_LINE_SIZE * ninputs_pad * (BLOCKS_PER_SUB+1); // Should be 5275648000 for 256T in 160+1 blocks
+        desired_size = transfer_size + SUBFILE_HEADER_SIZE;               // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
-        active_rf_inputs = 0;                                                                                           // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
+        active_rf_inputs = 0;                                             // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
-        for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {                                                                // populate the metadata array for all rf_inputs in this subobs incl padding ones
+        for ( loop = 0 ; loop < ninputs_pad ; loop++ ) {                  // populate the metadata array for all rf_inputs in this subobs incl padding ones
           my_MandC_meta[loop].rf_input = subm->rf_inp[loop].rf_input;
           my_MandC_meta[loop].start_byte = ( UDP_PAYLOAD_SIZE + ( subm->rf_inp[loop].ws_delay * 2  ) );			// NB: Each delay is a sample, ie two bytes, not one!!!
           my_MandC_meta[loop].seen_order = subm->rf2ndx[ my_MandC_meta[loop].rf_input ];                                // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
@@ -2005,65 +2009,6 @@ void *makesub()
           sprintf( dest_file, "%s/%lld_%d_%d.sub", conf.shared_mem_dir, subm->GPSTIME, subm->subobs, subm->COARSE_CHAN );       // Construct the full file name including path for a .sub (regular) file
         }
 
-//---------- Make a 4K ASCII header for the sub file ----------
-
-        memset( sub_header, 0, SUBFILE_HEADER_SIZE );                                                                   // Pre fill with null chars just to ensure we don't leave junk anywhere in the header
-
-
-        uint32_t packet_map_offset = sizeof(block_0_working) * ninputs_pad;   // ideally we should just calculate this where we write out the packet map
-        // but then we'd need to move the header-write to the end of makesub()
-        // and I don't want to take that step just yet.  Asserting for now.
-        uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB-2+7)/8;     // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
-        uint32_t packet_map_len = ninputs_pad * packet_map_stride;
-
-        {
-          INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
-          char utc_start[30];
-          time_t observation_start=subm->UNIXTIME;
-          strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
-
-          char *bp=sub_header;
-          char *ep=sub_header+SUBFILE_HEADER_SIZE;
-          bp+=snprintf(bp, ep-bp, "HDR_SIZE %lld\n",                 SUBFILE_HEADER_SIZE);
-          bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
-          bp+=snprintf(bp, ep-bp, "OBS_ID %lld\n",                   subm->GPSTIME);
-          bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
-          bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
-          bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
-          bp+=snprintf(bp, ep-bp, "OBS_OFFSET %lld\n",               obs_offset);
-          bp+=snprintf(bp, ep-bp, "NBIT 8\n");
-          bp+=snprintf(bp, ep-bp, "NPOL 2\n");
-          bp+=snprintf(bp, ep-bp, "NTIMESAMPLES %lld\n",             NTIMESAMPLES);
-          bp+=snprintf(bp, ep-bp, "NINPUTS %d\n",                    subm->NINPUTS);
-          bp+=snprintf(bp, ep-bp, "NINPUTS_XGPU %d\n",               ninputs_xgpu);
-          bp+=snprintf(bp, ep-bp, "APPLY_PATH_WEIGHTS 0\n");
-          bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
-          bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
-          bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
-          bp+=snprintf(bp, ep-bp, "APPLY_COARSE_DERIPPLE %d\n",      subm->DERIPPLE);
-          bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %lld\n",          (subm->FINECHAN_hz/ULTRAFINE_BW));
-          bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
-          bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %ld\n",             transfer_size);
-          bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
-          bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
-          bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
-          bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
-          bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
-          bp+=snprintf(bp, ep-bp, "UNIXTIME %lld\n",                 subm->UNIXTIME);
-          bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
-          bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
-          bp+=snprintf(bp, ep-bp, "NFINE_CHAN %lld\n",               (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
-          bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
-          bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
-          bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
-          bp+=snprintf(bp, ep-bp, "MC_PORT 0\n");
-          bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
-          bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
-          bp+=snprintf(bp, ep-bp, "IDX_PACKET_MAP %d+%d\n",          packet_map_offset, packet_map_len);
-          bp+=snprintf(bp, ep-bp, "IDX_DELAY_TABLE %d+%d\n",         0, 0);  // TODO - compute correct values for these fields
-          bp+=snprintf(bp, ep-bp, "IDX_MARGIN_DATA %d+%d\n",         0, 0);
-          bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
-        }
 
 //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
 
@@ -2141,16 +2086,19 @@ void *makesub()
           }
         }
 
+
 //---------- Hopefully we have an mmap to a sub file in shared memory and we're ready to fill it with data ----------
 
         if ( go4sub ) {                                                         // If everything is good to go so far
 
-          dest = ext_shm_buf;                                                   // we'll be trying to write to this block of RAM in strict address order, starting at the beginning (ie ext_shm_buf)
+          // first we write block0, noting the offsets to the data sections as we go along,
+          // then we go back and write the 4k header.
 
-          dest = mempcpy( dest, sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
-          char *block0_add = dest;
+          dest=ext_shm_buf+SUBFILE_HEADER_SIZE;
+          char *block0_add = dest; // 0th block is after the 4k header,and just contains metadata;
 
-          block1_add = dest + ( ninputs_pad * SUB_LINE_SIZE );			// Work out where we need to be when we write out the 1st block (ie after the 0th block). This makes it easy for us to 'pad out' the 0th block to a full block size.
+          // Work out block1_add now to make it easy for us to 'pad out' the 0th block to a full block size.
+          char *block1_add = dest + ( ninputs_pad * SUB_LINE_SIZE );	// address of the 1st data block, after the 0th block.
 
 //---------- Write out the 0th block (the tile metadata block) ----------
 
@@ -2181,19 +2129,18 @@ void *makesub()
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
-          UINT8 *packet_map = (UINT8*) dest;                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
 
-          if (packet_map_offset != (UINT8 *)packet_map - (UINT8 *) block0_add) {
-            printf("incorrect packet map offset. %d!=%ld\n", packet_map_offset, (UINT8 *) packet_map - (UINT8 *) ext_shm_buf);
-            fflush(stdout);
-            // TODO should abort here
-          }
+          uint8_t *packet_map = (uint8_t*) dest;                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
+
+          uint32_t packet_map_offset = (char*)packet_map - block0_add;
+          uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB-2+7)/8;     // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
+          uint32_t packet_map_length = ninputs_pad * packet_map_stride;
+
 
             // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
           // 'block1_add points to the address at the beginning of block 1.  The remainder of block 0 needs to be null filled
 
           memset( dest, 0, block1_add - dest );					// Write out a bunch of nulls to line us up with the first voltage block (ie block 1)
-          dest = block1_add;							// And set our write pointer to the beginning of block 1
 
 //---------- Write out the dummy map ----------
 
@@ -2202,14 +2149,14 @@ void *makesub()
             uint16_t row = subm->rf2ndx[rfm->rf_input];
             char **packets = subm->udp_volts[row];
             for (int t=0; t<UDP_PER_RF_PER_SUB-2; t+=8) {
-              UINT8 bitmap = (packets[t+1] != NULL) << 7
-                           | (packets[t+2] != NULL) << 6
-                           | (packets[t+3] != NULL) << 5
-                           | (packets[t+4] != NULL) << 4
-                           | (packets[t+5] != NULL) << 3
-                           | (packets[t+6] != NULL) << 2
-                           | (packets[t+7] != NULL) << 1
-                           | (packets[t+8] != NULL);
+              uint8_t bitmap = (packets[t+1] != NULL) << 7
+                             | (packets[t+2] != NULL) << 6
+                             | (packets[t+3] != NULL) << 5
+                             | (packets[t+4] != NULL) << 4
+                             | (packets[t+5] != NULL) << 3
+                             | (packets[t+6] != NULL) << 2
+                             | (packets[t+7] != NULL) << 1
+                             | (packets[t+8] != NULL);
               packet_map[MandC_rf * packet_map_stride + t / 8] = bitmap;
             }
           }
@@ -2220,7 +2167,8 @@ void *makesub()
  * only ever stored in the second - but we still need that first packet in case we later want to shift
  * in samples, going the other way.
  */
-          uint8_t *block0_margin_dst = packet_map + packet_map_len;
+          uint8_t *block0_margin_dst = packet_map + packet_map_length;
+          uint8_t *block0_margin_start = block0_margin_dst;
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
@@ -2237,8 +2185,27 @@ void *makesub()
             sp = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 1];
             block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
           }
+          uint8_t *block0_margin_end = block0_margin_dst;
+
+          int margin_data_offset = (char*)block0_margin_start-block0_add;
+          int margin_data_length = block0_margin_end-block0_margin_start;
+
+
+//---------- Make a 4K ASCII header for the sub file ----------
+          {
+            data_section data_sections[]={
+                    {"PACKET_MAP",   packet_map_offset, packet_map_length},
+                    {"DELAY_TABLE",  0,0},
+                    {"MARGIN_DATA",  margin_data_offset, margin_data_length},
+            };
+            int lds=sizeof(data_sections)/sizeof(data_sections[0]);
+            build_subfile_header(subm, transfer_size, ninputs_xgpu, data_sections, lds);
+            memcpy( ext_shm_buf, sub_header, SUBFILE_HEADER_SIZE );              // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
+          }
+
 
 //---------- Write out the voltage data blocks ----------
+          dest = block1_add;						                            // Set our write pointer to the beginning of block 1
 
           for ( block = 1; block <= BLOCKS_PER_SUB; block++ ) {                 // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
             for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {          // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.  This is likely to be similar to the list we actually saw, but may not be identical!
@@ -2268,9 +2235,7 @@ void *makesub()
                 my_MandC->start_byte += bytes2copy;                                     // and where we are up to in reading them
 
               }                                                                 // We've finished the udp packet
-
             }                                                                   // We've finished the signal chain for this block
-
           }                                                                     // We've finished the block
 
           // By here, the entire sub has been written out to shared memory and it's time to close it out and rename it so it becomes available for other programs
@@ -2309,6 +2274,57 @@ void *makesub()
 //---------- We've been told to shut down ----------
     printf( "Exiting makesub\n" );
     pthread_exit(NULL);
+}
+
+void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, int ninputs_xgpu,
+                          const data_section *data_sections, int n_data_sections) {
+  INT64 obs_offset = subm->subobs - subm->GPSTIME;                                                                // How long since the observation started?
+  char utc_start[30];
+  time_t observation_start=subm->UNIXTIME;
+  strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
+
+  memset( sub_header, 0, SUBFILE_HEADER_SIZE );                                                                   // Pre fill with null chars just to ensure we don't leave junk anywhere in the header
+
+  char *bp=sub_header;
+  char *ep=sub_header+SUBFILE_HEADER_SIZE;
+  bp+=snprintf(bp, ep-bp, "HDR_SIZE %lld\n",                 SUBFILE_HEADER_SIZE);
+  bp+=snprintf(bp, ep-bp, "POPULATED 1\n");
+  bp+=snprintf(bp, ep-bp, "OBS_ID %lld\n",                   subm->GPSTIME);
+  bp+=snprintf(bp, ep-bp, "SUBOBS_ID %d\n",                  subm->subobs);
+  bp+=snprintf(bp, ep-bp, "MODE %s\n",                       subm->MODE);
+  bp+=snprintf(bp, ep-bp, "UTC_START %s\n",                  utc_start);
+  bp+=snprintf(bp, ep-bp, "OBS_OFFSET %lld\n",               obs_offset);
+  bp+=snprintf(bp, ep-bp, "NBIT 8\n");
+  bp+=snprintf(bp, ep-bp, "NPOL 2\n");
+  bp+=snprintf(bp, ep-bp, "NTIMESAMPLES %lld\n",             NTIMESAMPLES);
+  bp+=snprintf(bp, ep-bp, "NINPUTS %d\n",                    subm->NINPUTS);
+  bp+=snprintf(bp, ep-bp, "NINPUTS_XGPU %d\n",               ninputs_xgpu);
+  bp+=snprintf(bp, ep-bp, "APPLY_PATH_WEIGHTS 0\n");
+  bp+=snprintf(bp, ep-bp, "APPLY_PATH_DELAYS %d\n",          subm->CABLEDEL || subm->GEODEL);
+  bp+=snprintf(bp, ep-bp, "APPLY_PATH_PHASE_OFFSETS %d\n",   subm->CABLEDEL || subm->GEODEL);
+  bp+=snprintf(bp, ep-bp, "INT_TIME_MSEC %d\n",              subm->INTTIME_msec);
+  bp+=snprintf(bp, ep-bp, "APPLY_COARSE_DERIPPLE %d\n",      subm->DERIPPLE);
+  bp+=snprintf(bp, ep-bp, "FSCRUNCH_FACTOR %lld\n",          (subm->FINECHAN_hz/ULTRAFINE_BW));
+  bp+=snprintf(bp, ep-bp, "APPLY_VIS_WEIGHTS 0\n");
+  bp+=snprintf(bp, ep-bp, "TRANSFER_SIZE %ld\n",             transfer_size);
+  bp+=snprintf(bp, ep-bp, "PROJ_ID %s\n",                    subm->PROJECT);
+  bp+=snprintf(bp, ep-bp, "EXPOSURE_SECS %d\n",              subm->EXPOSURE);
+  bp+=snprintf(bp, ep-bp, "COARSE_CHANNEL %d\n",             subm->COARSE_CHAN);
+  bp+=snprintf(bp, ep-bp, "CORR_COARSE_CHANNEL %d\n",        conf.coarse_chan);
+  bp+=snprintf(bp, ep-bp, "SECS_PER_SUBOBS 8\n");
+  bp+=snprintf(bp, ep-bp, "UNIXTIME %lld\n",                 subm->UNIXTIME);
+  bp+=snprintf(bp, ep-bp, "UNIXTIME_MSEC 0\n");
+  bp+=snprintf(bp, ep-bp, "FINE_CHAN_WIDTH_HZ %d\n",         subm->FINECHAN_hz);
+  bp+=snprintf(bp, ep-bp, "NFINE_CHAN %lld\n",               (COARSECHAN_BANDWIDTH/subm->FINECHAN_hz));
+  bp+=snprintf(bp, ep-bp, "BANDWIDTH_HZ %lld\n",             COARSECHAN_BANDWIDTH);
+  bp+=snprintf(bp, ep-bp, "SAMPLE_RATE %lld\n",              SAMPLES_PER_SEC);
+  bp+=snprintf(bp, ep-bp, "MC_IP 0.0.0.0\n");
+  bp+=snprintf(bp, ep-bp, "MC_PORT 0\n");
+  bp+=snprintf(bp, ep-bp, "MC_SRC_IP 0.0.0.0\n");
+  bp+=snprintf(bp, ep-bp, "MWAX_U2S_VER " THISVER "-%d\n",   BUILD);
+  for(int i=0; i < n_data_sections; i++)
+    bp+=snprintf(bp, ep-bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
+  bp+=snprintf(bp, ep-bp, "MWAX_SUB_VER 2\n");
 }
 
 void *heartbeat()
