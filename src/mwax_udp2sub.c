@@ -2102,6 +2102,8 @@ void *makesub()
 
 //---------- Write out the 0th block (the tile metadata block) ----------
 
+          char *delay_table_start = dest;
+
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {            // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
 
             rfm = &subm->rf_inp[ MandC_rf ];					// Get a temp pointer for this tile's metadata
@@ -2129,20 +2131,18 @@ void *makesub()
             dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
           }
 
-
-          uint8_t *packet_map = (uint8_t*) dest;                                   // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
-
-          uint32_t packet_map_offset = (char*)packet_map - block0_add;
-          uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB-2+7)/8;     // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
-          uint32_t packet_map_length = ninputs_pad * packet_map_stride;
+          char *delay_table_end = dest;
+          int delay_table_offset = delay_table_start-block0_add;
+          int delay_table_length = delay_table_end-delay_table_start;
 
 
-            // 'dest' now points to the address after our last memory write, BUT we need to pad out to a whole block size!
-          // 'block1_add points to the address at the beginning of block 1.  The remainder of block 0 needs to be null filled
-
-          memset( dest, 0, block1_add - dest );					// Write out a bunch of nulls to line us up with the first voltage block (ie block 1)
 
 //---------- Write out the dummy map ----------
+          // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
+
+          char *packet_map_start = dest;
+
+          uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB-2+7)/8;     // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             rfm = &subm->rf_inp[ MandC_rf ];		                     			// Tile metadata
@@ -2157,9 +2157,14 @@ void *makesub()
                              | (packets[t+6] != NULL) << 2
                              | (packets[t+7] != NULL) << 1
                              | (packets[t+8] != NULL);
-              packet_map[MandC_rf * packet_map_stride + t / 8] = bitmap;
+              dest[t/8] = (char)bitmap;
             }
+            dest+=packet_map_stride;
           }
+
+          char *packet_map_end = dest;
+          int packet_map_offset = packet_map_start - block0_add;
+          int packet_map_length = packet_map_end-packet_map_start;
 
 //---------- Write out the volt data for the "margin packets" of every RF source to block 0. ----------
 /* We need two packet's worth at each end to be able to undo delays, because if we shift out samples
@@ -2167,35 +2172,37 @@ void *makesub()
  * only ever stored in the second - but we still need that first packet in case we later want to shift
  * in samples, going the other way.
  */
-          uint8_t *block0_margin_dst = packet_map + packet_map_length;
-          uint8_t *block0_margin_start = block0_margin_dst;
+          char *block0_margin_start = dest;
 
           for ( MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++ ) {
             my_MandC = &my_MandC_meta[MandC_rf];
 
             sp =  subm->udp_volts[my_MandC->seen_order][0];
-            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
+            dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
             sp = subm->udp_volts[my_MandC->seen_order][1];
-            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
+            dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
             sp = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 2];
-            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
+            dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
             sp = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 1];
-            block0_margin_dst = mempcpy(block0_margin_dst, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
+            dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
           }
-          uint8_t *block0_margin_end = block0_margin_dst;
 
-          int margin_data_offset = (char*)block0_margin_start-block0_add;
-          int margin_data_length = block0_margin_end-block0_margin_start;
+          char *block0_margin_end = dest;
+          int margin_data_offset = block0_margin_start - block0_add;
+          int margin_data_length = block0_margin_end - block0_margin_start;
 
+//
+//---------- null fill the remainder of block0
+          memset( dest, 0, block1_add - dest );
 
 //---------- Make a 4K ASCII header for the sub file ----------
           {
             data_section data_sections[]={
                     {"PACKET_MAP",   packet_map_offset, packet_map_length},
-                    {"DELAY_TABLE",  0,0},
+                    {"DELAY_TABLE",  delay_table_offset,delay_table_length},
                     {"MARGIN_DATA",  margin_data_offset, margin_data_length},
             };
             int lds=sizeof(data_sections)/sizeof(data_sections[0]);
