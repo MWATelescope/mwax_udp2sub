@@ -1009,7 +1009,6 @@ void *UDP_parse()
 //---------------- Main loop to process incoming udp packets -------------------
 
     while (!terminate) {
-
       if ( UDP_removed_from_buff < UDP_added_to_buff ) {                // If there is at least one packet waiting to be processed
         mwa_udp_packet_t *my_udp;                                       // Make a local pointer to the UDP packet we're working on
         my_udp = &UDPbuf[ UDP_removed_from_buff % UDP_num_slots ];      // and point to it.
@@ -1095,7 +1094,7 @@ void *UDP_parse()
                 ts->udp_volts[i]=voltage_save[i];
                 memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB*sizeof(char*));
               }
-            }
+            }  // wipe sub[slot_ndx] to zero
 
             if ( sub[ slot_ndx ].state != 0 ) {                         // If state isn't 0 now, then it's bad.  We have a transaction to store and the subobs it belongs to can't be set up because its slot is still in use by an earlier subobs
 
@@ -1108,19 +1107,16 @@ void *UDP_parse()
               raise(SIGABRT);                                           // For debugging, let's just crash here so we can get a core dump
               terminate = TRUE;                                         // Lets make a fatal error so we know we'll spot it
               continue;                                                 // abort what we're attempting and all go home
-            }
+            } // abort
 
             sub[ slot_ndx ].subobs = ( my_udp->GPS_time & subobs_mask );        // The subobs number is the GPS time of the beginning second so mask off the bottom 3 bits
             sub[ slot_ndx ].first_udp = UDP_removed_from_buff;          // This was the first udp packet seen for this sub. (0 based)
             sub[ slot_ndx ].state = 1;                                  // Let's remember we're using this slot now and tell other threads.  NB: The subobs field is assumed to have been populated *before* this becomes 1
-
           }
 
 //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
-
           this_sub = &sub[(( my_udp->GPS_time >> 3 ) & 0b11 )];         // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into the subobs metadata array which we use to get the pointer to the struct
           last_good_packet_sub_time = ( my_udp->GPS_time & subobs_mask );       // Remember this so next packet we proabably don't need to do these checks and lookups again
-
         }
 
 //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
@@ -1143,7 +1139,6 @@ void *UDP_parse()
 
 //---------- We are done with this packet, EXCEPT if this was the very first for an rf_input for a subobs, or the very last, then we want to duplicate them in the adjacent subobs.
 //---------- This is because one packet may contain data that goes in two subobs (or even separate obs!) due to delay tracking
-
         if ( my_udp->subsec_time == 1 ) {                               // If this was the first packet (for an rf input) for a subobs
           my_udp->subsec_time = SUBSECSPERSUB + 1;                      // then say it's at the end of a subobs
           my_udp->GPS_time--;                                           // and back off the second count to put it in the last subobs
@@ -2514,7 +2509,6 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
       w_delta_delay += dt_entry_working.delta_delta_delay;	       	    // and update out *TEMP* delta.  We need to do this using temp values, so we don't 'use up' the initial values we want to write out.
     }
 
-    //dest = mempcpy( dest, &block_0_working, sizeof(block_0_working) );	// write them out one at a time
     printf("%d,%d,%.*f,%.*f,%.*f,%.*f,%.*f,%.*f,%d,%d,",
 
            rfm->rf_input,
