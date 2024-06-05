@@ -3,10 +3,13 @@
 //
 // Author(s)  BWC Brian Crosse brian.crosse@curtin.edu.au
 //            LAW Luke Williams luke.a.williams@curtin.edu.au
+//            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 88
-#define THISVER "2.10"
+#define BUILD 89
+#define THISVER "2.11"
+//
+// 2.11-089     2024-06-05 CJP  completed more header offsets, improved shutdown behaviour in the absence of packets.
 //
 // 2.10-088     2024-05-07 CJP  determine oversampling from mwax.cfg, pass through deripple, set packet_map offset in header.
 //
