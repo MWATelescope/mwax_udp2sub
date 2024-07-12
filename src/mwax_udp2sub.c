@@ -600,6 +600,21 @@ typedef struct udp2sub_config {               // Structure for the configuration
 udp2sub_config_t conf;                          // A place to store the configuration data for this instance of the program.  ie of the 60 copies running on 10 computers or whatever
 
 
+void report_substatus(char *thread_name, char *status);
+void report_substatus(char *thread_name, char *status)
+{
+  struct timespec this_time;
+  clock_gettime( CLOCK_REALTIME, &this_time);
+  printf("now=%lld.%03d %-15s: ", (INT64)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec/1000000), thread_name);
+  printf("sub[].(state,meta_done) = [%d.%d %d.%d %d.%d %d.%d] ",
+         sub[0].state,sub[0].meta_done,
+         sub[1].state,sub[1].meta_done,
+         sub[2].state,sub[2].meta_done,
+         sub[3].state,sub[3].meta_done
+  );
+  printf("%s\n", status);
+  fflush(stdout);
+}
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // load_channel_map - Load config from a CSV file.
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1086,6 +1101,13 @@ void *UDP_parse()
             slot_ndx = ( my_udp->GPS_time >> 3 ) & 0b11;                // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us our index into the subobs metadata array
 
             if ( sub[ slot_ndx ].state >= 4 ) {                         // If the state is a 4 or 5 or higher, then it's free for reuse, but someone needs to wipe the contents.  I guess that 'someone' means me!
+
+              {  //report sub loop state.
+                char status[80];
+                snprintf(status, sizeof(status), "first new packet for subobs %d - clearing.", slot_ndx);
+                report_substatus("UDP_parse", status);
+              }
+
               subobs_udp_meta_t *ts = &sub[slot_ndx];
 
               static char **voltage_save[MAX_INPUTS+1];
@@ -1234,6 +1256,7 @@ void add_meta_fits()
 
     int temp_CHANNELS[24];
     int course_swap_index;
+    int ticks_waited = 0;
 
 //---------------- Main loop to live in until shutdown -------------------
 
@@ -1269,7 +1292,17 @@ void add_meta_fits()
 
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
         usleep(100000);                                                 // Chill for a longish time.  NO point in checking more often than a couple of times a second.
+        ticks_waited+=1;
+        if(ticks_waited%(10*6)==0) {  //every few seconds
+          report_substatus("add_meta_fits", "waiting");
+        }
       } else {                                                          // or we have some work to do!  Like a whole metafits file to process!
+        ticks_waited = 0;
+        {  //report sub loop state.
+          char status[80];
+          snprintf(status, sizeof(status), "ready to write metafits for subobs %d", subobs_ready2write);
+          report_substatus("add_meta_fits", status);
+        }
 
 //---------- but if we *do* have metafits info needing to be read ----------
 
@@ -1865,6 +1898,11 @@ altaz[0].Dist_km
 //            printf("meta: so=%d,bcsf=%lld,GPSTIME=%lld,EXPOSURE=%d,PROJECT=%s,MODE=%s,CHANNELS=%s,FINECHAN_hz=%d,INTTIME_msec=%d,NINPUTS=%d,UNIXTIME=%lld,len=%d,st=%d,wait=%d,took=%d\n",
 //              subm->subobs, bcsf_obsid, subm->GPSTIME, subm->EXPOSURE, subm->PROJECT, subm->MODE, subm->CHANNELS, subm->FINECHAN_hz, subm->INTTIME_msec, subm->NINPUTS, subm->UNIXTIME, len, subm->meta_done, subm->meta_msec_wait, subm->meta_msec_took);
 
+        {  //report sub loop state.
+          char status[80];
+          snprintf(status, sizeof(status), "completed metafits writing for subobs %d", subobs_ready2write);
+          report_substatus("add_meta_fits", status);
+        }
       }				// End of 'if there is a metafits to read' (actually an 'else' off 'is there nothing to do')
     }				// End of huge 'while !terminate' loop
 }				// End of function
@@ -1939,6 +1977,7 @@ void *makesub()
     int source_packet;                                                  // which packet (of 5002) contains the first byte of data we need
     int source_offset;                                                  // what is the offset in that packet of the first byte we need
     int source_remain;                                                  // How much data is left from that offset to the end of the udp packet
+    int ticks_waited;  // count howmany usleeps we've been wating for a subobservation to write.
 
     char *sp;
 
@@ -1952,6 +1991,7 @@ void *makesub()
 
     clock_gettime( CLOCK_REALTIME, &ended_sub_write_time);  // Fake the ending time for the last sub file ('cos like there wasn't one y'know but the logging will expect something)
 
+    ticks_waited = 0;
     while (!terminate) {                                                // If we're not supposed to shut down, let's find something to do
 
 //---------- look for a sub to write out ----------
@@ -1972,7 +2012,20 @@ void *makesub()
 
       if ( subobs_ready2write == -1 ) {                                 // if there is nothing to do
         usleep(20000);                                                  // Chillax for a bit.
+        ticks_waited+=1;
+        if(ticks_waited%(50*5)==0) {  //every few secpnds
+          report_substatus("makesub", "waiting");
+        }
+
       } else {                                                          // or we have some work to do!  Like a whole sub file to write out!
+        ticks_waited = 0;
+
+        {  //report sub loop state.
+          char status[80];
+          snprintf(status, sizeof(status), "found subobs %d", subobs_ready2write);
+          report_substatus("makesub", status);
+        }
+
 
         clock_gettime( CLOCK_REALTIME, &started_sub_write_time);        // Record the start time before we actually get started.  The clock starts ticking from here.
         subm = &sub[subobs_ready2write];                                  // Temporary pointer to our sub's metadata array
@@ -2273,6 +2326,11 @@ void *makesub()
             (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
 
         fflush(stdout);
+        {  //report sub loop state.
+          char status[80];
+          snprintf(status, sizeof(status), "completed subobs %d", subobs_ready2write);
+          report_substatus("makesub", status);
+        }
       }
     }                                                                   // Jump up to the top and look again (as well as checking if we need to shut down)
 
