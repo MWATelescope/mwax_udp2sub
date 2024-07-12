@@ -405,8 +405,6 @@ typedef struct tile_meta {                              // Structure format for 
     int Delays[16];
 //    int VCSOrder;
     char Flavors[11];
-    float Calib_Delay;
-    float Calib_Gains[24];
 
     uint16_t rf_input;                                  // What's the tile & pol identifier we'll see in the udp packets for this input?
 
@@ -1618,22 +1616,6 @@ void add_meta_fits()
         fits_read_col( fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status );
         for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Flavors, cfitsio_str_ptr[loop] );
 
-//---------- Read and write the 'Calib_Delay' field --------
-
-        fits_get_colnum( fptr, CASEINSEN, "Calib_Delay", &colnum, &status );
-        FITS_CHECK("get_colnum CALIB_DELAY");
-        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].Calib_Delay = cfitsio_floats[loop];           // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-
-//---------- Read and write the 'Calib_Gains' field --------
-
-        fits_get_colnum( fptr, CASEINSEN, "Calib_Gains", &colnum, &status );
-        FITS_CHECK("get_colnum CALIB_GAINS");
-        // Like 'Gains' and 'Delays, this is an array. This time of floats.
-        for (int loop = 0; loop < nrows; loop++) {
-          fits_read_col( fptr, TFLOAT, colnum, loop+1, felem, 24, 0, subm->rf_inp[ metafits2sub_order[loop] ].Calib_Gains, &anynulls, &status );
-        }
-
 //---------- Now we have read everything available from the 2nd HDU but we want to do some conversions and calculations per tile.  That can wait until after we read the 3rd HDU ----------
 //           We need to read in the AltAz information (ie the 3rd HDU) for the beginning, middle and end of this subobservation
 //           Note the indent change caused by moving code around. Maybe I'll fix that later... Maybe not.
@@ -1837,7 +1819,7 @@ altaz[0].Dist_km
 //---------- Print out a bunch of debug info ----------
 
           if (debug_mode) {										// Debug logging to screen
-            printf( "%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s,%f:",
+            printf( "%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s:",
             subm->subobs,
             loop,
             rfm->rf_input,
@@ -1865,22 +1847,8 @@ altaz[0].Dist_km
             rfm->BFTemps,
             // rfm->Delays,
 //            rfm->VCSOrder,
-            rfm->Flavors,
-            rfm->Calib_Delay
-            //rfm->Calib_Gains
+            rfm->Flavors
             );
-
-//          for (int loop2 = 0; loop2 < 24; loop2++) {
-//            printf( "%d,", rfm->Gains[loop2] );
-//          }
-
-//          for (int loop2 = 0; loop2 < 16; loop2++) {
-//            printf( "%d,", rfm->Delays[loop2] );
-//          }
-
-//          for (int loop2 = 0; loop2 < 24; loop2++) {
-//            printf( "%f,", rfm->Calib_Gains[loop2] );
-//          }
 
             printf( "\n" );
           }												// Only see this if we're in debug mode
