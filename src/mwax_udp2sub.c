@@ -6,8 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 89
-#define THISVER "2.11"
+#define BUILD 90
+#define THISVER "2.12"
+//
+// 2.12-090     2024-08-13 CJP  buffer state logging, and stopped reading CALIB_DELAY/CALIB_GAINS
 //
 // 2.11-089     2024-06-05 CJP  completed more header offsets, improved shutdown behaviour in the absence of packets.
 //
