@@ -1,0 +1,8 @@
+---
+BasedOnStyle: Google
+---
+Language: Cpp
+AlignConsecutiveAssignments: true
+ColumnLimit: 180
+SortIncludes: Never
+
