@@ -1716,21 +1716,16 @@ void add_meta_fits() {
           pthread_exit(NULL);  // and close down ourselves.
         }
 
+        // note - there could be a few thousand entries here.
         while ((dp = readdir(dir)) != NULL) {                      // Read an entry and while there are still directory entries to look at
           if ((dp->d_type == DT_REG) && (dp->d_name[0] != '.')) {  // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
-            if (((len_filename = strlen(dp->d_name)) >= 15) && (strcmp(&dp->d_name[len_filename - 14], "_metafits.fits") ==
-                                                                0)) {  // If the filename is at least 15 characters long and the last 14 characters are "_metafits.fits"
-
+            if (((len_filename = strlen(dp->d_name)) >= 15) && (strcmp(&dp->d_name[len_filename - 14], "_metafits.fits") == 0)) {
+              // If the filename is at least 15 characters long and the last 14 characters are "_metafits.fits"
               mf_obsid = strtoll(dp->d_name, 0, 0);  // Get the obsid from the name
-
-              if (mf_obsid <= subm->subobs) {  // if the obsid is less than or the same as our subobs id, then it's a candidate for the one we need
-
-                if (mf_obsid > bcsf_obsid) {  // If this metafits is later than the 'best candidate so far'?
-                  bcsf_obsid = mf_obsid;      // that would make it our new best candidate so far
-
-                  // printf( "best metafits #%lld\n", bcsf_obsid );
-
-                  go4meta = TRUE;  // We've found at least one file worth looking at.
+              if (mf_obsid <= subm->subobs) {        // if the obsid is less than or the same as our subobs id, then it's a candidate for the one we need
+                if (mf_obsid > bcsf_obsid) {         // If this metafits is later than the 'best candidate so far'?
+                  bcsf_obsid = mf_obsid;             // that would make it our new best candidate so far
+                  go4meta    = TRUE;                 // We've found at least one file worth looking at.
                 }
               }
             }
@@ -1872,6 +1867,7 @@ void add_meta_fits() {
     }  // End of 'if there is a metafits to read' (actually an 'else' off 'is there nothing to do')
   }  // End of huge 'while !terminate' loop
 }  // End of function
+
 void *add_meta_fits_thread() {
   add_meta_fits();
   pthread_exit(NULL);
