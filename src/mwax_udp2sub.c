@@ -1244,9 +1244,6 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   //    printf( "About to read: %s\n", metafits_file );
 
   if (!fits_open_file(&fptr, metafits_file, READONLY, &status)) {  // Try to open the file and if it works
-    int hdupos;
-
-    fits_get_hdu_num(fptr, &hdupos);  // get the current HDU position
 
     fits_read_key_verbose(fptr, TLONGLONG, "GPSTIME", NULL, &(subm->GPSTIME), NULL,
                           &status);  // Read the GPSTIME of the metafits observation (should be same as bcsf_obsid but read anyway)
@@ -1341,7 +1338,6 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     FITS_CHECK("read_key UNIXTIME");
     //---------- We now have everything we need from the 1st HDU ----------
 
-    int hdutype = 0;
     int colnum;
     int anynulls;
     long nrows;
@@ -1361,10 +1357,8 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     int metafits2sub_order[MAX_INPUTS];  // index is the position in the metafits file starting at 0.  Value is the order in the sub file starting at 0.
 
-    fits_movrel_hdu(fptr, 1, &hdutype, &status);  // Shift to the next HDU, where the antenna table is
-    if (status) {
-      FITS_CHECK("Move to 2nd HDU");
-    }
+    fits_movnam_hdu(fptr, BINARY_TBL, "TILEDATA", 0, &status);
+    FITS_CHECK("Move to TILEDATA HDU");
 
     fits_get_num_rows(fptr, &nrows, &status);
     FITS_CHECK("get_num_rows 2nd HDU");
@@ -1510,8 +1504,8 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     //           We need to read in the AltAz information (ie the 3rd HDU) for the beginning, middle and end of this subobservation
     //           Note the indent change caused by moving code around. Maybe I'll fix that later... Maybe not.
 
-    fits_movrel_hdu(fptr, 1, &hdutype, &status);  // Shift to the next HDU, where the AltAz table is
-    FITS_CHECK("Move to 3nd HDU");
+    fits_movnam_hdu(fptr, BINARY_TBL, "ALTAZ", 0, &status);
+    FITS_CHECK("Move to ALTAZ HDU");
 
     fits_get_num_rows(fptr, &ntimes, &status);  // How many rows (times) are written to the metafits?
     DEBUG_LOG("ntimes=%ld\n", ntimes);
