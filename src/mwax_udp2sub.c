@@ -1594,6 +1594,32 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   }
 }
 
+void test_read_metafits(int tdi) {
+  subobs_udp_meta_t sub;
+  int instance           = 0;                                   // Assume we're the first (or only) instance on this server
+  int chan_override      = 0;                                   // Assume we are going to use the default coarse channel for this instance
+  char *conf_file        = "/vulcan/mwax_config/mwax_u2s.cfg";  // Default configuration path
+  char *shared_conf_file = "/vulcan/mwax_config/mwax.cfg";      // Default shared configuration path
+  char hostname[300];                                           // Long enough to fit a 255 host name.  Probably it will only be short, but -hey- it's just a few bytes
+  if (gethostname(hostname, sizeof hostname) == -1) strcpy(hostname, "unknown");  // Get the hostname or default to unknown if we fail
+  printf("Running udp2sub on %s.  ver " THISVER " Build %d\n", hostname, BUILD);
+
+  read_config(conf_file, shared_conf_file, hostname, instance, chan_override, &conf);
+  printf("conf.coarse_chan = %d\n", conf.coarse_chan);
+
+  struct {
+    char *fnam;
+    uint32_t subobs;
+  } test_data[] = {
+      {"/home/mwa/incident/1408332144_metafits.fits", 1408332145},
+      {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
+      {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
+
+  };
+  sub.subobs = test_data[tdi].subobs;
+  read_metafits(test_data[tdi].fnam, &sub);
+}
+
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // Add metafits info - Every time a new 8 second block of udp packets starts, try to find the metafits data applicable and write it into the subm structure
 //---------------------------------------------------------------------------------------------------------------------------------------------------
