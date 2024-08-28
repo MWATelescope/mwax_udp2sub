@@ -1233,12 +1233,15 @@ int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, cha
 }
 
 void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
+  // preconditions:
+  //     subm->subobs >= subm->GPSTIME (the latter as read from the metafits_file, theoretically should be same as the number in the filename)
+  //     conf.coarse_chan > 0
+  //     conf.coarse_chan <= 24
+
   fitsfile *fptr;  // FITS file pointer, defined in fitsio.h
-  int status;      // CFITSIO status value MUST be initialized to zero!
+  int status = 0;  // CFITSIO status value MUST be initialized to zero!
 
   //    printf( "About to read: %s\n", metafits_file );
-
-  status = 0;  // CFITSIO status value MUST be initialized to zero!
 
   if (!fits_open_file(&fptr, metafits_file, READONLY, &status)) {  // Try to open the file and if it works
     int hdupos;
