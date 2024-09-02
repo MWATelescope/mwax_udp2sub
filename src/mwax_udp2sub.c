@@ -230,6 +230,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdbool.h>
 
 #include <netinet/ip.h>
 #include <sys/socket.h>
@@ -314,7 +315,7 @@
   if (status) {                                             \
     fprintf(stderr, "Error in metafits access (%s): ", OP); \
     fits_report_error(stderr, status);                      \
-    status = 0;                                             \
+    return false;                                           \
   }
 #ifdef DEBUG
 #define DEBUG_LOG(...) fprintf(stderr, __VA_ARGS__)
@@ -1224,6 +1225,7 @@ long double get_path_difference(long double north, long double east, long double
 }
 
 int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, char *verbose_keyname, void *value, char *comm, int *status) {
+  // TODO - ensure read_metafits() returns false if any of these fail.
   int res = fits_read_key(fptr, datatype, keyname, value, comm, status);
   if (*status) {
     printf("Failed to read %s\n", keyname);
@@ -1232,19 +1234,24 @@ int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, cha
   return res;
 }
 
-void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
+bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   // preconditions:
   //     subm->subobs >= subm->GPSTIME (the latter as read from the metafits_file, theoretically should be same as the number in the filename)
   //     conf.coarse_chan > 0
   //     conf.coarse_chan <= 24
+  // returns:
+  //     false on failure
+  //     true on success
 
   fitsfile *fptr;  // FITS file pointer, defined in fitsio.h
   int status = 0;  // CFITSIO status value MUST be initialized to zero!
 
   //    printf( "About to read: %s\n", metafits_file );
 
-  if (!fits_open_file(&fptr, metafits_file, READONLY, &status)) {  // Try to open the file and if it works
+  fits_open_file(&fptr, metafits_file, READONLY, &status);
+  if (status) return false;
 
+  {
     fits_read_key_verbose(fptr, TLONGLONG, "GPSTIME", NULL, &(subm->GPSTIME), NULL,
                           &status);  // Read the GPSTIME of the metafits observation (should be same as bcsf_obsid but read anyway)
     fits_read_key_verbose(fptr, TINT, "EXPOSURE", NULL, &(subm->EXPOSURE), NULL, &status);  // Read the EXPOSURE time from the metafits
@@ -1334,6 +1341,8 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_key_verbose(fptr, TINT, "NINPUTS", NULL, &(subm->NINPUTS), NULL, &status);
     if (subm->NINPUTS > MAX_INPUTS) subm->NINPUTS = MAX_INPUTS;  // Don't allow more inputs than MAX_INPUTS (probably die reading the tile list anyway)
 
+    if (subm->NINPUTS == 0) printf("subfile specifies no inputs!?\n");  // Check we found something plausible
+
     fits_read_key_verbose(fptr, TLONGLONG, "UNIXTIME", NULL, &(subm->UNIXTIME), NULL, &status);
     FITS_CHECK("read_key UNIXTIME");
     //---------- We now have everything we need from the 1st HDU ----------
@@ -1358,12 +1367,13 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     int metafits2sub_order[MAX_INPUTS];  // index is the position in the metafits file starting at 0.  Value is the order in the sub file starting at 0.
 
     fits_movnam_hdu(fptr, BINARY_TBL, "TILEDATA", 0, &status);
-    FITS_CHECK("Move to TILEDATA HDU");
+    FITS_CHECK("Moving to TILEDATA HDU");
 
     fits_get_num_rows(fptr, &nrows, &status);
     FITS_CHECK("get_num_rows 2nd HDU");
     if (nrows != subm->NINPUTS) {
       printf("NINPUTS (%d) doesn't match number of rows in tile data table (%ld)\n", subm->NINPUTS, nrows);
+      return false;
     }
 
     frow  = 1;
@@ -1371,12 +1381,12 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     //        nullval = -99.;
 
     fits_get_colnum(fptr, CASEINSEN, "Antenna", &colnum, &status);
-    FITS_CHECK("get_colnum Antenna");
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Antenna column");
 
     fits_get_colnum(fptr, CASEINSEN, "Pol", &colnum, &status);
-    FITS_CHECK("get_colnum Pol");
     fits_read_col(fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status);
+    FITS_CHECK("reading Pol column");
 
     for (int loop = 0; loop < nrows; loop++) {
       metafits2sub_order[loop] = (cfitsio_ints[loop] << 1) |                 // Take the "Antenna" number, multiply by 2 via lshift
@@ -1398,6 +1408,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "Input", &colnum, &status);
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Input column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Input = cfitsio_ints[loop];
     // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
@@ -1405,6 +1416,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "Tile", &colnum, &status);
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Tile column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Tile = cfitsio_ints[loop];
     // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
@@ -1412,12 +1424,14 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "TileName", &colnum, &status);
     fits_read_col(fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status);
+    FITS_CHECK("reading TileName column");
     for (int loop = 0; loop < nrows; loop++) strcpy(subm->rf_inp[metafits2sub_order[loop]].TileName, cfitsio_str_ptr[loop]);
 
     //---------- Read and write the 'Rx' field --------
 
     fits_get_colnum(fptr, CASEINSEN, "Rx", &colnum, &status);
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Rx column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Rx = cfitsio_ints[loop];
     // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
@@ -1425,6 +1439,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "Slot", &colnum, &status);
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Slot column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Slot = cfitsio_ints[loop];
     // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
@@ -1432,6 +1447,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "Flag", &colnum, &status);
     fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, cfitsio_ints, &anynulls, &status);
+    FITS_CHECK("reading Flag column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Flag = cfitsio_ints[loop];
     // Copy each integer from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
 
@@ -1439,6 +1455,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "Length", &colnum, &status);
     fits_read_col(fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status);
+    FITS_CHECK("reading Length column");
     //      for (int loop = 0; loop < nrows; loop++) strcpy( subm->rf_inp[ metafits2sub_order[loop] ].Length, cfitsio_str_ptr[loop] );
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Length_f = roundl(strtold(cfitsio_str_ptr[loop] + 3, NULL) * 1000.0);
     // Not what it might first appear. Convert the weird ASCII 'EL_123' format 'Length' string into a usable float, The +3 is 'step in 3 characters'
@@ -1447,18 +1464,21 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
     fits_get_colnum(fptr, CASEINSEN, "North", &colnum, &status);
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status);
+    FITS_CHECK("reading North column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].North = roundl(cfitsio_floats[loop] * 1000.0);  // Convert to long double in mm and round
 
     //---------- Read and write the 'East' field --------
 
     fits_get_colnum(fptr, CASEINSEN, "East", &colnum, &status);
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status);
+    FITS_CHECK("reading East column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].East = roundl(cfitsio_floats[loop] * 1000.0);  // Convert to long double in mm and round
 
     //---------- Read and write the 'Height' field --------
 
     fits_get_colnum(fptr, CASEINSEN, "Height", &colnum, &status);
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status);
+    FITS_CHECK("reading Height column");
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Height = roundl(cfitsio_floats[loop] * 1000.0);  // Convert to long double in mm and round
 
     //---------- Read and write the 'Gains' field --------
@@ -1469,6 +1489,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     for (int loop = 0; loop < nrows; loop++) {
       fits_read_col(fptr, TINT, colnum, loop + 1, felem, 24, 0, subm->rf_inp[metafits2sub_order[loop]].Gains, &anynulls, &status);
     }
+    FITS_CHECK("reading Gains");
 
     //---------- Read and write the 'BFTemps' field --------
 
@@ -1476,6 +1497,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status);
     for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].BFTemps = cfitsio_floats[loop];
     // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+    FITS_CHECK("reading BFTemps");
 
     //---------- Read and write the 'Delays' field --------
 
@@ -1484,6 +1506,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     for (int loop = 0; loop < nrows; loop++) {
       fits_read_col(fptr, TINT, colnum, loop + 1, felem, 16, 0, subm->rf_inp[metafits2sub_order[loop]].Delays, &anynulls, &status);
     }
+    FITS_CHECK("reading Delays");
 
     //---------- Read and write the 'VCSOrder' field --------
     //
@@ -1495,9 +1518,9 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     //---------- Read and write the 'Flavors' field --------
 
     fits_get_colnum(fptr, CASEINSEN, "Flavors", &colnum, &status);
-    FITS_CHECK("get_colnum FLAVORS");
     fits_read_col(fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status);
     for (int loop = 0; loop < nrows; loop++) strcpy(subm->rf_inp[metafits2sub_order[loop]].Flavors, cfitsio_str_ptr[loop]);
+    FITS_CHECK("reading Flavors");
 
     //---------- Now we have read everything available from the 2nd HDU but we want to do some conversions and calculations per tile.  That can wait until after we read the
     // 3rd HDU ----------
@@ -1505,7 +1528,7 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     //           Note the indent change caused by moving code around. Maybe I'll fix that later... Maybe not.
 
     fits_movnam_hdu(fptr, BINARY_TBL, "ALTAZ", 0, &status);
-    FITS_CHECK("Move to ALTAZ HDU");
+    FITS_CHECK("Moving to ALTAZ HDU");
 
     fits_get_num_rows(fptr, &ntimes, &status);  // How many rows (times) are written to the metafits?
     DEBUG_LOG("ntimes=%ld\n", ntimes);
@@ -1580,18 +1603,16 @@ void read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
         subm->altaz[loop].SinAlt      = SinAlt;          // this conversion factor will be multiplied by tile Height
       }
     }
-
-    //---------- We now have everything we need from the fits file ----------
-
-  }  // End of 'if the metafits file opened correctly'
+  //---------- We now have everything we need from the fits file ----------
+  }
 
   if (status == END_OF_FILE) status = 0;  // Reset after normal error
-
   fits_close_file(fptr, &status);
   if (status) {
     fprintf(stderr, "Error when closing metafits file: ");
     fits_report_error(stderr, status);  // print any error message
   }
+  return true;
 }
 
 void test_read_metafits(int tdi) {
@@ -1617,7 +1638,8 @@ void test_read_metafits(int tdi) {
 
   };
   sub.subobs = test_data[tdi].subobs;
-  read_metafits(test_data[tdi].fnam, &sub);
+  bool ok    = read_metafits(test_data[tdi].fnam, &sub);
+  printf("read_metafits(\"%s\", &sub) returned %s\n\n", test_data[tdi].fnam, ok ? "true" : "false");
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1759,118 +1781,112 @@ void add_meta_fits() {
 
       //---------- Open the 'best candidate so far' metafits file ----------
 
-      if (go4meta) {      // If everything is okay so far, enter the next block of code
-        go4meta = FALSE;  // but go back to assuming a failure unless we succeed in the next bit
-
+      if (go4meta) {                                                                     // If everything is okay so far, enter the next block of code
         sprintf(metafits_file, "%s/%lld_metafits.fits", conf.metafits_dir, bcsf_obsid);  // Construct the full file name including path
-
-        read_metafits(metafits_file, subm);
+        go4meta = read_metafits(metafits_file, subm);
       }  // End of 'go for meta' metafile reading
 
-      //---------- Let's take all that metafits info, do some maths and other processing and get it ready to use, for when we need to actually write out the sub file
+      if (go4meta) {
+        //---------- Let's take all that metafits info, do some maths and other processing and get it ready to use, for when we need to actually write out the sub file
 
-      tile_meta_t *rfm;
-      long double delay_so_far_start_mm;   // Delay to apply IN MILLIMETRES calculated so far at start of 8 sec subobservation
-      long double delay_so_far_middle_mm;  // Delay to apply IN MILLIMETRES calculated so far at middle of 8 sec subobservation
-      long double delay_so_far_end_mm;     // Delay to apply IN MILLIMETRES calculated so far at end of 8 sec subobservation
+        for (int loop = 0; loop < subm->NINPUTS; loop++) {
+          tile_meta_t *rfm = &subm->rf_inp[loop];                           // Make a temporary pointer to this rf input, if only for readability of the source
+          rfm->rf_input = (rfm->Tile << 1) | ((*rfm->Pol == 'Y') ? 1 : 0);  // Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives
+          // the content of the 'rf_input' field in the udp packets for this row
 
-      for (int loop = 0; loop < subm->NINPUTS; loop++) {
-        rfm           = &subm->rf_inp[loop];                              // Make a temporary pointer to this rf input, if only for readability of the source
-        rfm->rf_input = (rfm->Tile << 1) | ((*rfm->Pol == 'Y') ? 1 : 0);  // Take the "Tile" number, multiply by 2 via lshift and iff the 'Pol' is Y, then add in a 1. That gives
-                                                                          // the content of the 'rf_input' field in the udp packets for this row
+          long double delay_so_far_start_mm  = 0;  // accumulator for delay to apply IN MILLIMETRES calculated so far at start of 8 sec subobservation
+          long double delay_so_far_middle_mm = 0;  // accumulator for delay to apply IN MILLIMETRES calculated so far at middle of 8 sec subobservation
+          long double delay_so_far_end_mm    = 0;  // accumulator for delay to apply IN MILLIMETRES calculated so far at end of 8 sec subobservation
 
-        delay_so_far_start_mm  = 0L;  // No known delays (yet) for the start of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
-        delay_so_far_middle_mm = 0L;  // No known delays (yet) for the middle of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
-        delay_so_far_end_mm    = 0L;  // No known delays (yet) for the end of the subobservation. So far we're calculating delays all in millimeters (of light travel time)
+          //---------- Do cable delays ----------
 
-        //---------- Do cable delays ----------
+          if (subm->CABLEDEL >= 1) {  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+            delay_so_far_start_mm += rfm->Length_f;   // So add in the cable delays WIP!!! or is it subtract them?
+            delay_so_far_middle_mm += rfm->Length_f;  // Cable delays apply equally at the start, middle and end of the subobservation
+            delay_so_far_end_mm += rfm->Length_f;     // so add them equally to all three delays for start, middle and end
+          }
 
-        if (subm->CABLEDEL >= 1) {  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-          delay_so_far_start_mm += rfm->Length_f;   // So add in the cable delays WIP!!! or is it subtract them?
-          delay_so_far_middle_mm += rfm->Length_f;  // Cable delays apply equally at the start, middle and end of the subobservation
-          delay_so_far_end_mm += rfm->Length_f;     // so add them equally to all three delays for start, middle and end
+          //          if ( subm->CABLEDEL >= 2 ){  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only
+          //          the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+          //          what's the value in mm of the beamformer delays
+          //            delay_so_far_start_mm += bf_delay;
+          //            delay_so_far_middle_mm += bf_delay;                    // Cable delays apply equally at the start, middle and end
+          //            of the subobservation delay_so_far_end_mm += bf_delay; // so add them equally to all three
+          //            delays for start, middle and end
+          //          }
+
+          //---------- Do Geometric delays ----------
+
+          if (subm->GEODEL >= 1) {  // GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+            delay_so_far_start_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
+            delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
+            delay_so_far_end_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
+          }
+          DEBUG_LOG("north: %Lf, east: %Lf, height: %Lf, ", rfm->North, rfm->East, rfm->Height);
+          //---------- Do Calibration delays ----------
+          //   WIP.  Calibration delays are just a dream right now
+
+          //---------- Convert 'start', 'middle' and 'end' delays from millimetres to samples --------
+
+          long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;   // Convert start delay into samples at the coarse channel sample rate
+          long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;  // Convert middle delay into samples at the coarse channel sample rate
+          long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;     // Convert end delay into samples at the coarse channel sample rate
+          DEBUG_LOG("start: %Lf, middle: %Lf, end: %Lf, ", start_sub_s, middle_sub_s, end_sub_s);
+          //---------- Commit to a whole sample delay and calculate the residuals --------
+
+          long double whole_sample_delay =
+              roundl(middle_sub_s);  // Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
+          // This will be corrected for by shifting coarse channel samples forward and backward in time by whole samples
+
+          start_sub_s -= whole_sample_delay;   // Remove the whole sample we're using for this subobs to leave the residual delay that will be done by phase turning
+          middle_sub_s -= whole_sample_delay;  // This may still leave more than +/- a half a sample
+          end_sub_s -= whole_sample_delay;     // but it's not allowed to leave more than +/- two whole samples (See Ian's code or IanM for more detail)
+
+          //---------- Check it's within the range Ian's code can handle of +/- two whole samples
+
+          if ((start_sub_s > res_max) || (start_sub_s < res_min) || (end_sub_s > res_max) || (end_sub_s < res_min)) {
+            printf("residual delays out of bounds!\n");
+          }
+
+          //---------- Now treat the start, middle & end  residuals as points on a parabola at x=0, x=800, x=1600 ----------
+          //      Calculate a, b & c of this parabola in the form: delay = ax^2 + bx + c where x is the (tenth of a) block number
+
+          a = (start_sub_s - middle_sub_s - middle_sub_s + end_sub_s) * two_over_num_blocks_sqrd;                                                       // a = (s+e-2*m)/(n*n/2)
+          b = (middle_sub_s + middle_sub_s + middle_sub_s + middle_sub_s - start_sub_s - start_sub_s - start_sub_s - end_sub_s) * one_over_num_blocks;  // b = (4*m-3*s-e)/(n)
+          c = start_sub_s;                                                                                                                              // c = s
+          DEBUG_LOG("a: %Lf, b: %Lf, c: %Lf, ", a, b, c);
+          //      residual delays can now be interpolated for any time using 'ax^2 + bx + c' where x is the time
+
+          //---------- We'll be calulating each value in turn so we're better off passing back in a form only needing 2 additions per data point.
+          //   The phase-wrap delay correction phase wants the delay at time points of x=.5, x=1.5, x=2.5, x=3.5 etc, so
+          //   we'll set an initial value of a×0.5^2 + b×0.5 + c to get the first point and our first step in will be:
+          rfm->initial_delay      = a * 0.25L + b * 0.5L + c;     // ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
+          rfm->delta_delay        = a + a + b;                    // That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
+          rfm->delta_delta_delay  = a + a;                        // ie 2a because it's the 2nd derivative
+          rfm->ws_delay           = (int16_t)whole_sample_delay;  // whole_sample_delay has already been roundl(ed) somewhere above here
+          rfm->start_total_delay  = start_sub_s;
+          rfm->middle_total_delay = middle_sub_s;
+          rfm->end_total_delay    = end_sub_s;
+          DEBUG_LOG("ws: %d, initial: %d, delta: %d, delta_delta: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
+
+          //---------- Print out a bunch of debug info ----------
+
+          if (debug_mode) {  // Debug logging to screen
+            printf("%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s:", subm->subobs, loop, rfm->rf_input, rfm->Input, rfm->Antenna, rfm->Tile,
+                   rfm->TileName, rfm->Pol, rfm->Rx, rfm->Slot, rfm->Flag,
+                   //            rfm->Length,
+                   rfm->Length_f, (delay_so_far_start_mm * mm2s_conv_factor), (delay_so_far_middle_mm * mm2s_conv_factor), (delay_so_far_end_mm * mm2s_conv_factor), rfm->ws_delay,
+                   rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->North, rfm->East, rfm->Height,
+                   // rfm->Gains,
+                   rfm->BFTemps,
+                   // rfm->Delays,
+                   //            rfm->VCSOrder,
+                   rfm->Flavors);
+
+            printf("\n");
+          }  // Only see this if we're in debug mode
         }
-
-        //          if ( subm->CABLEDEL >= 2 ){  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only
-        //          the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-        //          what's the value in mm of the beamformer delays
-        //            delay_so_far_start_mm += bf_delay;
-        //            delay_so_far_middle_mm += bf_delay;                    // Cable delays apply equally at the start, middle and end
-        //            of the subobservation delay_so_far_end_mm += bf_delay; // so add them equally to all three
-        //            delays for start, middle and end
-        //          }
-
-        //---------- Do Geometric delays ----------
-
-        if (subm->GEODEL >= 1) {  // GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
-          delay_so_far_start_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
-          delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
-          delay_so_far_end_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
-        }
-        DEBUG_LOG("north: %Lf, east: %Lf, height: %Lf, ", rfm->North, rfm->East, rfm->Height);
-        //---------- Do Calibration delays ----------
-        //   WIP.  Calibration delays are just a dream right now
-
-        //---------- Convert 'start', 'middle' and 'end' delays from millimetres to samples --------
-
-        long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;   // Convert start delay into samples at the coarse channel sample rate
-        long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;  // Convert middle delay into samples at the coarse channel sample rate
-        long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;     // Convert end delay into samples at the coarse channel sample rate
-        DEBUG_LOG("start: %Lf, middle: %Lf, end: %Lf, ", start_sub_s, middle_sub_s, end_sub_s);
-        //---------- Commit to a whole sample delay and calculate the residuals --------
-
-        long double whole_sample_delay =
-            roundl(middle_sub_s);  // Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
-                                   // This will be corrected for by shifting coarse channel samples forward and backward in time by whole samples
-
-        start_sub_s -= whole_sample_delay;   // Remove the whole sample we're using for this subobs to leave the residual delay that will be done by phase turning
-        middle_sub_s -= whole_sample_delay;  // This may still leave more than +/- a half a sample
-        end_sub_s -= whole_sample_delay;     // but it's not allowed to leave more than +/- two whole samples (See Ian's code or IanM for more detail)
-
-        //---------- Check it's within the range Ian's code can handle of +/- two whole samples
-
-        if ((start_sub_s > res_max) || (start_sub_s < res_min) || (end_sub_s > res_max) || (end_sub_s < res_min)) {
-          printf("residual delays out of bounds!\n");
-        }
-
-        //---------- Now treat the start, middle & end  residuals as points on a parabola at x=0, x=800, x=1600 ----------
-        //      Calculate a, b & c of this parabola in the form: delay = ax^2 + bx + c where x is the (tenth of a) block number
-
-        a = (start_sub_s - middle_sub_s - middle_sub_s + end_sub_s) * two_over_num_blocks_sqrd;                                                       // a = (s+e-2*m)/(n*n/2)
-        b = (middle_sub_s + middle_sub_s + middle_sub_s + middle_sub_s - start_sub_s - start_sub_s - start_sub_s - end_sub_s) * one_over_num_blocks;  // b = (4*m-3*s-e)/(n)
-        c = start_sub_s;                                                                                                                              // c = s
-        DEBUG_LOG("a: %Lf, b: %Lf, c: %Lf, ", a, b, c);
-        //      residual delays can now be interpolated for any time using 'ax^2 + bx + c' where x is the time
-
-        //---------- We'll be calulating each value in turn so we're better off passing back in a form only needing 2 additions per data point.
-        //   The phase-wrap delay correction phase wants the delay at time points of x=.5, x=1.5, x=2.5, x=3.5 etc, so
-        //   we'll set an initial value of a×0.5^2 + b×0.5 + c to get the first point and our first step in will be:
-        rfm->initial_delay      = a * 0.25L + b * 0.5L + c;     // ie a×0.5^2 + b×0.5 + c for our initial value of delay(0.5)
-        rfm->delta_delay        = a + a + b;                    // That's our first step.  ie delay(1.5) - delay(0.5) or if you like, (a*1.5^2+b*1.5+c) - (a*0.5^2+b*0.5+c)
-        rfm->delta_delta_delay  = a + a;                        // ie 2a because it's the 2nd derivative
-        rfm->ws_delay           = (int16_t)whole_sample_delay;  // whole_sample_delay has already been roundl(ed) somewhere above here
-        rfm->start_total_delay  = start_sub_s;
-        rfm->middle_total_delay = middle_sub_s;
-        rfm->end_total_delay    = end_sub_s;
-        DEBUG_LOG("ws: %d, initial: %d, delta: %d, delta_delta: %d\n", rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay);
         meta_result = 4;
-
-        //---------- Print out a bunch of debug info ----------
-
-        if (debug_mode) {  // Debug logging to screen
-          printf("%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s:", subm->subobs, loop, rfm->rf_input, rfm->Input, rfm->Antenna, rfm->Tile,
-                 rfm->TileName, rfm->Pol, rfm->Rx, rfm->Slot, rfm->Flag,
-                 //            rfm->Length,
-                 rfm->Length_f, (delay_so_far_start_mm * mm2s_conv_factor), (delay_so_far_middle_mm * mm2s_conv_factor), (delay_so_far_end_mm * mm2s_conv_factor), rfm->ws_delay,
-                 rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->North, rfm->East, rfm->Height,
-                 // rfm->Gains,
-                 rfm->BFTemps,
-                 // rfm->Delays,
-                 //            rfm->VCSOrder,
-                 rfm->Flavors);
-
-          printf("\n");
-        }  // Only see this if we're in debug mode
       }
 
       //---------- And we're basically done reading the metafits and preping for the sub file write which is only a few second away (done by another thread)
