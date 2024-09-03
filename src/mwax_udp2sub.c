@@ -1563,6 +1563,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
       subm->altaz[loop].gpstime = cfitsio_J[loop];  // Copy each 'J' integer from the array we got from the metafits (via cfitsio) into one element of the pointing array structure
+    FITS_CHECK("reading gpstime column");
 
     //---------- Read and write the 'Alt' field --------
 
@@ -1571,6 +1572,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
       subm->altaz[loop].Alt = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+    FITS_CHECK("reading Alt column");
 
     //---------- Read and write the 'Az' field --------
 
@@ -1579,6 +1581,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
       subm->altaz[loop].Az = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+    FITS_CHECK("reading Az column");
 
     //---------- Read and write the 'Dist_km' field --------
 
@@ -1587,6 +1590,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
       subm->altaz[loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+    FITS_CHECK("reading Dist_km column");
 
     //---------- Now calculate the East/North/Height conversion factors for the three times --------
 
