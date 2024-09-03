@@ -1904,8 +1904,8 @@ void add_meta_fits() {
 
       subm->meta_done = go4meta ? 4 : 5;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-      if (meta_result != sub->meta_done) {
-        printf("LOGIC ERROR: meta_result=%d but go4meta=%s\n", meta_result, go4meta ? "true" : "false");
+      if (meta_result != subm->meta_done) {
+        printf("LOGIC ERROR: meta_result=%d but subm->meta_done=%d (go4meta=%s)\n", meta_result, subm->meta_done, (go4meta ? "true" : "false"));
       }
 
       {  // report sub loop state.
