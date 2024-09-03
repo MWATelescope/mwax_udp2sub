@@ -1723,7 +1723,7 @@ void add_meta_fits() {
       ticks_waited = 0;
       {  // report sub loop state.
         char status[80];
-        snprintf(status, sizeof(status), "ready to write metafits for subobs %d", subobs_ready2write);
+        snprintf(status, sizeof(status), "ready to add metafits for subobs %d", subobs_ready2write);
         report_substatus("add_meta_fits", status);
       }
 
@@ -1785,6 +1785,11 @@ void add_meta_fits() {
       if (go4meta) {                                                                     // If everything is okay so far, enter the next block of code
         sprintf(metafits_file, "%s/%lld_metafits.fits", conf.metafits_dir, bcsf_obsid);  // Construct the full file name including path
         go4meta = read_metafits(metafits_file, subm);
+        {  // report sub loop state.
+          char status[380];
+          snprintf(status, sizeof(status), "attempt to read %s %s.", metafits_file, go4meta ? "succeeded" : "failed");
+          report_substatus("add_meta_fits", status);
+        }
       }  // End of 'go for meta' metafile reading
 
       if (go4meta) {
@@ -1897,11 +1902,15 @@ void add_meta_fits() {
       subm->meta_msec_took = ((ended_meta_write_time.tv_sec - started_meta_write_time.tv_sec) * 1000) +
                              ((ended_meta_write_time.tv_nsec - started_meta_write_time.tv_nsec) / 1000000);  // msec since this sub started
 
-      subm->meta_done = meta_result;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
+      subm->meta_done = go4meta ? 4 : 5;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
+
+      if (meta_result != sub->meta_done) {
+        printf("LOGIC ERROR: meta_result=%d but go4meta=%s\n", meta_result, go4meta ? "true" : "false");
+      }
 
       {  // report sub loop state.
-        char status[80];
-        snprintf(status, sizeof(status), "completed metafits writing for subobs %d", subobs_ready2write);
+        char status[100];
+        snprintf(status, sizeof(status), "completed metafits reading for subobs %d, go4meta=%s.", subobs_ready2write, go4meta ? "true" : "false");
         report_substatus("add_meta_fits", status);
       }
     }  // End of 'if there is a metafits to read' (actually an 'else' off 'is there nothing to do')
