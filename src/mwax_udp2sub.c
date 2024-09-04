@@ -1246,22 +1246,19 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   fitsfile *fptr;  // FITS file pointer, defined in fitsio.h
   int status = 0;  // CFITSIO status value MUST be initialized to zero!
 
-  //    printf( "About to read: %s\n", metafits_file );
-
   fits_open_file(&fptr, metafits_file, READONLY, &status);
   if (status) return false;
 
-  fits_read_key_verbose(fptr, TLONGLONG, "GPSTIME", NULL, &(subm->GPSTIME), NULL,
-                        &status);  // Read the GPSTIME of the metafits observation (should be same as bcsf_obsid but read anyway)
-  fits_read_key_verbose(fptr, TINT, "EXPOSURE", NULL, &(subm->EXPOSURE), NULL, &status);  // Read the EXPOSURE time from the metafits
-  fits_read_key_verbose(fptr, TSTRING, "FILENAME", "observation filename", &(subm->FILENAME), NULL,
-                        &status);  // WIP!!! SHould be changed to allow reading more than one line
-  fits_read_key_verbose(fptr, TINT, "CABLEDEL", NULL, &(subm->CABLEDEL), NULL,
-                        &status);  // Read the CABLEDEL field. 0=Don't apply. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
+  fits_read_key_verbose(fptr, TLONGLONG, "GPSTIME", NULL, &(subm->GPSTIME), NULL, &status);                    // Read the GPSTIME of the metafits observation
+                                                                                                               // (should be same as bcsf_obsid but read anyway)
+  fits_read_key_verbose(fptr, TINT, "EXPOSURE", NULL, &(subm->EXPOSURE), NULL, &status);                       // Read the EXPOSURE time from the metafits
+  fits_read_key_verbose(fptr, TSTRING, "FILENAME", "observation filename", &(subm->FILENAME), NULL, &status);  // WIP!!! SHould be changed to allow reading more than one line
+  fits_read_key_verbose(fptr, TINT, "CABLEDEL", NULL, &(subm->CABLEDEL), NULL, &status);                       // Read the CABLEDEL field.
+                                                                                                               // 0=Don't apply. 1=apply only the cable delays.
+                                                                                                               // 2=apply cable delays _and_ average beamformer dipole delays.
   if (debug_mode || force_cable_delays) subm->CABLEDEL = 1;
 
-  fits_read_key_verbose(fptr, TINT, "GEODEL", NULL, &(subm->GEODEL), NULL,
-                        &status);  // Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+  fits_read_key_verbose(fptr, TINT, "GEODEL", NULL, &(subm->GEODEL), NULL, &status);  // Read the GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
   if (debug_mode || force_geo_delays) subm->GEODEL = 3;
 
   fits_read_key_verbose(fptr, TINT, "CALIBDEL", NULL, &(subm->CALIBDEL), NULL, &status);           // Read the CALIBDEL field. (0=Don't apply calibration solutions. 1=Do apply)
@@ -1274,14 +1271,15 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   }
 
   //---------- Parsing the sky frequency (coarse) channel is a whole job in itself! ----------
-  int temp_CHANNELS[24];
   {
+    int temp_CHANNELS[24];
     char *token;
     char *saveptr;
     fits_read_key_longstr(fptr, "CHANNELS", &saveptr, NULL, &status);
     if (status) {
       printf("Failed to read Channels\n");
       fflush(stdout);
+      return false;
     }
 
     int ch_index = 0;        // Start at channel number zero (of 0 to 23)
@@ -1295,33 +1293,33 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     if (ch_index != 24) {
       printf("Did not find 24 channels in metafits file.\n");
       fflush(stdout);
+      return false;
     }
-  }
 
-  // From the RRI user manual:
-  // "1. The DR coarse PFB outputs the 256 channels in a fashion that the first 128 channels appear in sequence
-  // followed by the 129 channels and then 256 down to 130 appear. The setfreq is user specific command wherein
-  // the user has to enter the preferred 24 channesl in sequence to be transported using the 3 fibers. [ line 14 Appendix- E]"
-  // Clear as mud?  Yeah.  I thought so too.
+    // From the RRI user manual:
+    // "1. The DR coarse PFB outputs the 256 channels in a fashion that the first 128 channels appear in sequence
+    // followed by the 129 channels and then 256 down to 130 appear. The setfreq is user specific command wherein
+    // the user has to enter the preferred 24 channesl in sequence to be transported using the 3 fibers. [ line 14 Appendix- E]"
+    // Clear as mud?  Yeah.  I thought so too.
 
-  // So we want to look through for where a channel number is greater than, or equal to 129.  We'll assume they are already sorted by M&C
+    // So we want to look through for where a channel number is greater than, or equal to 129.  We'll assume they are already sorted by M&C
+    int course_swap_index = 24;  // start by assuming there are no channels to swap
 
-  int course_swap_index = 24;  // start by assuming there are no channels to swap
-
-  // find the index where the channels are swapped i.e. where 129 exists
-  for (int i = 0; i < 24; ++i) {
-    if (temp_CHANNELS[i] >= 129) {
-      course_swap_index = i;
-      break;
+    // find the index where the channels are swapped i.e. where 129 exists
+    for (int i = 0; i < 24; ++i) {
+      if (temp_CHANNELS[i] >= 129) {
+        course_swap_index = i;
+        break;
+      }
     }
-  }
 
-  // Now reorder freq array based on the course channel boundary around 129
-  for (int i = 0; i < 24; ++i) {
-    if (i < course_swap_index) {
-      subm->CHANNELS[i] = temp_CHANNELS[i];
-    } else {
-      subm->CHANNELS[23 - i + (course_swap_index)] = temp_CHANNELS[i];  // I was confident this line was correct back when 'recombine' was written!
+    // Now reorder freq array based on the course channel boundary around 129
+    for (int i = 0; i < 24; ++i) {
+      if (i < course_swap_index) {
+        subm->CHANNELS[i] = temp_CHANNELS[i];
+      } else {
+        subm->CHANNELS[23 - i + (course_swap_index)] = temp_CHANNELS[i];  // I was confident this line was correct back when 'recombine' was written!
+      }
     }
   }
 
@@ -1521,10 +1519,11 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   for (int loop = 0; loop < nrows; loop++) strcpy(subm->rf_inp[metafits2sub_order[loop]].Flavors, cfitsio_str_ptr[loop]);
   FITS_CHECK("reading Flavors");
 
-  //---------- Now we have read everything available from the 2nd HDU but we want to do some conversions and calculations per tile.  That can wait until after we read the
-  // 3rd HDU ----------
-  //           We need to read in the AltAz information (ie the 3rd HDU) for the beginning, middle and end of this subobservation
-  //           Note the indent change caused by moving code around. Maybe I'll fix that later... Maybe not.
+  // Now we have read everything available from the TILEDATA HDU
+  // but we want to do some conversions and calculations per tile.
+  // Those can be performed by the caller.
+
+  // We need to read in the AltAz information from the ALTAZ HDU for the beginning, middle and end of this subobservation
 
   fits_movnam_hdu(fptr, BINARY_TBL, "ALTAZ", 0, &status);
   FITS_CHECK("Moving to ALTAZ HDU");
