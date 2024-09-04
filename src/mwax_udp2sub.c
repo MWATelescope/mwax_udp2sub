@@ -6,8 +6,12 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 90
-#define THISVER "2.12"
+#define BUILD 91
+#define THISVER "2.13"
+//
+// 2.13-091     2024-09-04 CJP  navigate metafits HDUs by name not index, separate out metafits parsing to dedicated function,
+//                              and add more error checks and logging.  Add and apply standard clang-format settings.  First
+//                              run at a CMake build.
 //
 // 2.12-090     2024-08-13 CJP  buffer state logging, and stopped reading CALIB_DELAY/CALIB_GAINS
 //
