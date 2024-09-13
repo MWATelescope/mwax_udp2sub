@@ -374,7 +374,6 @@ typedef struct udp2sub_monitor {   // Health packet data
 // most advanced udp packet
 // Lowest remaining buffer left
 // Stats on lost packets
-// mon->ignored_for_being_too_old++;                               // Keep track for debugging of how many packets were too late to process
 // mon->sub_write_sleeps++;                                        // record we went to sleep
 // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 
@@ -1030,6 +1029,7 @@ void *UDP_parse() {
 
   //---------------- Main loop to process incoming udp packets -------------------
 
+  // TODO - sanity check timestamps on incoming packets, log and discard any that are clearly garbage
   while (!terminate) {
     if (UDP_removed_from_buff < UDP_added_to_buff) {            // If there is at least one packet waiting to be processed
       mwa_udp_packet_t *my_udp;                                 // Make a local pointer to the UDP packet we're working on
@@ -1056,49 +1056,39 @@ void *UDP_parse() {
       }
 
       //---------- If this packet is for the same sub obs as the previous packet, we can assume a bunch of things haven't changed or rolled over, otherwise we have things to check
-
       if ((my_udp->GPS_time & subobs_mask) != last_good_packet_sub_time) {  // If this is a different sub obs than the last packet we allowed through to be processed.
-
         //---------- Arrived too late to be usable?
-
         if (my_udp->GPS_time < start_window) {  // This packet has a time stamp before the earliest open sub-observation
-          // WIP            mon->ignored_for_being_too_old++;                              // Keep track for debugging of how many packets were too late to process
-          UDP_removed_from_buff++;  // Throw it away.  ie flag it as used and release the buffer slot.  We don't want to see it again.
-          continue;                 // start the loop again
+          UDP_removed_from_buff++;              // Throw it away.  ie flag it as used and release the buffer slot.  We don't want to see it again.
+          continue;                             // start the loop again
         }
 
         //---------- Further ahead in time than we're ready for?
-
         if (my_udp->GPS_time > end_window) {
           // This packet has a time stamp after the end of the latest open sub-observation.  We need to do some preparatory work before we can process this packet.
 
-          // First we need to know if this is simply the next chronological subobs, or if we have skipped ahead.  NB that a closedown packet will look like we skipped ahead to
-          // 2106.  If we've skipped ahead then all current subobs need to be closed.
-
+          // First we need to know if this is simply the next chronological subobs, or if we have skipped ahead.
+          // NB that a closedown packet will look like we skipped ahead to 2106.
+          // If we've skipped ahead then all current subobs need to be closed.
           if (end_window == ((my_udp->GPS_time | 0b111) - 8)) {
             // our proposed new end window is the udp packet's time with the bottom 3 bits all set.
             // If that's (only) 8 seconds after the current end window... then our new start window is (and may already have been)
             start_window = end_window - 7;            // the beginning of the subobs which was our last subobs a moment ago.
-                                                      // (7 seconds because the second counts are inclusive).
-            end_window = my_udp->GPS_time | 0b111;    // new end window is the last second of the subobs for the second we just saw, so round up (ie set) the last three bits
+            end_window   = my_udp->GPS_time | 0b111;  // new end window is the last second of the subobs for the second we just saw, so round up (ie set) the last three bits
                                                       // Ensure every subobs but the last one are closed
           } else {                                    // otherwise the packet stream is so far into the future that we need to close *all* open subobs.
             end_window   = my_udp->GPS_time | 0b111;  // new end window is the last second of the subobs for the second we just saw, so round up (ie set) the last three bits
             start_window = end_window - 7;            // then our new start window is the beginning second of the subobs for the packet we just saw.
-                                                      // (7 seconds because the second counts are inclusive).
           }
 
-          for (int loop = 0; loop < SUB_SLOTS; loop++) {
-            // We'll check all subobs meta slots.  If they're too old, we'll rule them off.  NB this may not be checked in time order of subobs
+          for (int loop = 0; loop < SUB_SLOTS; loop++) {  // check all subobs meta slots. If they're too old we'll rule them off. NB this may not be checked in time order of subobs
             if ((sub[loop].subobs < start_window) && (sub[loop].state == 1)) {
               // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
               if (sub[loop].subobs == (start_window - 8)) {  // then if it's a very recent subobs (which is what we'd expect during normal operations)
                 sub[loop].state = 2;                         // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
-              } else {                                       // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
-                if (sub[loop].meta_done != 2) {              // but we can only do that if we're not currently trying to load its metafits. If not,
-                  sub[loop].state = 6;                       // set the state flag to indicate that this subobs should be abandoned as too old to be useful
-                  monitor.discarded_subobs++;
-                }
+              } else if (sub[loop].meta_done != 2) {         // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
+                sub[loop].state = 6;                         // but we can only do that if we're not currently trying to load its metafits. If not,
+                monitor.discarded_subobs++;                  // set the state flag to indicate that this subobs should be abandoned as too old to be useful
               }
             }
           }
@@ -1111,10 +1101,8 @@ void *UDP_parse() {
 
           // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
           // sub writing threads
-
           slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
                                                       // our index into the subobs metadata array
-
           if (sub[slot_ndx].state >= 4) {
             // If the state is a 4 or 5 or higher, then it's free for reuse, but someone needs to wipe the contents.  I guess that 'someone' means me!
             {  // report sub loop state.
@@ -1141,14 +1129,12 @@ void *UDP_parse() {
 
           if (sub[slot_ndx].state != 0) {  // If state isn't 0 now, then it's bad.  We have a transaction to store and the subobs it belongs to can't be set up because its slot is
                                            // still in use by an earlier subobs
-
-            printf("Error: Subobs slot %d still in use. Currently in state %d.\n", slot_ndx,
-                   sub[slot_ndx].state);  // If this actually happens during normal operation, we will need to fix the cause or (maybe) bandaid it with a delay here, but for now
+            printf("Error: Subobs slot %d still in use. Currently in state %d.\n", slot_ndx, sub[slot_ndx].state);
+            // If this actually happens during normal operation, we will need to fix the cause or (maybe) bandaid it with a delay here, but for now
             printf("Wanted to put gps=%d, subobs=%d, first=%lld, state=1\n", my_udp->GPS_time, (my_udp->GPS_time & subobs_mask), UDP_removed_from_buff);
             printf("Found so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n", sub[slot_ndx].subobs, sub[slot_ndx].state,
                    sub[slot_ndx].msec_wait, sub[slot_ndx].msec_took, sub[slot_ndx].first_udp, sub[slot_ndx].last_udp, sub[slot_ndx].udp_at_start_write,
                    sub[slot_ndx].udp_at_end_write, sub[slot_ndx].udp_count, sub[slot_ndx].rf_seen);
-
             fflush(stdout);
             raise(SIGABRT);    // For debugging, let's just crash here so we can get a core dump
             terminate = TRUE;  // Lets make a fatal error so we know we'll spot it
@@ -1169,11 +1155,9 @@ void *UDP_parse() {
 
       //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
 
-      rf_ndx = this_sub->rf2ndx[my_udp->rf_input];  // Look up the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on
-                                                    // a different sub
-
-      if (rf_ndx == 0) {      // If the lookup for this rf input for this sub is still a zero, it means this is the first time we've seen one this sub from this rf input
-        this_sub->rf_seen++;  // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
+      rf_ndx = this_sub->rf2ndx[my_udp->rf_input];               // Look up the position in the meta array we are using for this rf input (for this sub).
+      if (rf_ndx == 0) {                                         // this is the first time we've seen one this sub from this rf input
+        this_sub->rf_seen++;                                     // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
         this_sub->rf2ndx[my_udp->rf_input] = this_sub->rf_seen;  // and assign that number for this rf input's metadata index
         rf_ndx                             = this_sub->rf_seen;  // and get the correct index for this packet too because we'll need that
       }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
@@ -1192,17 +1176,14 @@ void *UDP_parse() {
       //---------- We are done with this packet, EXCEPT if this was the very first for an rf_input for a subobs, or the very last, then we want to duplicate them in the adjacent
       // subobs.
       //---------- This is because one packet may contain data that goes in two subobs (or even separate obs!) due to delay tracking
-      if (my_udp->subsec_time == 1) {             // If this was the first packet (for an rf input) for a subobs
-        my_udp->subsec_time = SUBSECSPERSUB + 1;  // then say it's at the end of a subobs
-        my_udp->GPS_time--;                       // and back off the second count to put it in the last subobs
+      if (my_udp->subsec_time == 1) {                     // If this was the first packet (for an rf input) for a subobs
+        my_udp->subsec_time = SUBSECSPERSUB + 1;          // then say it's at the end of a subobs
+        my_udp->GPS_time--;                               // and back off the second count to put it in the last subobs
+      } else if (my_udp->subsec_time == SUBSECSPERSUB) {  // If this was the last packet (for an rf input) for a subobs
+        my_udp->subsec_time = 0;                          // then say it's at the start of a subobs
+        my_udp->GPS_time++;                               // and increment the second count to put it in the next subobs
       } else {
-        if (my_udp->subsec_time == SUBSECSPERSUB) {  // If this was the last packet (for an rf input) for a subobs
-          my_udp->subsec_time = 0;                   // then say it's at the start of a subobs
-          my_udp->GPS_time++;                        // and increment the second count to put it in the next subobs
-        } else {
-          UDP_removed_from_buff++;  // We don't need to duplicate this packet, so increment the number of packets we've ever processed (which automatically releases them from the
-                                    // buffer).
-        }
+        UDP_removed_from_buff++;  // We don't need to duplicate this packet, so incr the number of packets we've ever processed (which releases the packet from the buffer).
       }
 
       //---------- End of processing of this UDP packet ----------
