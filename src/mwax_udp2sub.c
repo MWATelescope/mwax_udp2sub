@@ -1017,8 +1017,10 @@ void *UDP_parse() {
   uint32_t last_good_packet_sub_time = 0;           // What sub obs was the last packet (for caching)
   uint32_t subobs_mask               = 0xFFFFFFF8;  // Mask to apply with '&' to get sub obs from GPS second
 
+  // time is divided in to 8 second 'slots' (one per subobservation), referenced by their first second in GPS time
+  // these variables track the range of slots we are currently accepting packets for
   uint32_t start_window = 0;  // What's the oldest packet we're accepting right now?
-  uint32_t end_window   = 0;  // What's the highest GPS time we can accept before recalculating our usable window?  Hint: We *need* to recalculate that window
+  uint32_t last_wslot   = 0;  // last page of current window (equal to old "end_window"-7).  Recalc window when we receive a packet for a later page.
 
   int slot_ndx;  // index into which of the 4 subobs metadata blocks we want
   int rf_ndx;    // index into the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on a different sub.
@@ -1058,27 +1060,27 @@ void *UDP_parse() {
       //---------- If this packet is for the same sub obs as the previous packet, we can assume a bunch of things haven't changed or rolled over, otherwise we have things to check
       if ((my_udp->GPS_time & subobs_mask) != last_good_packet_sub_time) {  // If this is a different sub obs than the last packet we allowed through to be processed.
         //---------- Arrived too late to be usable?
-        if (my_udp->GPS_time < start_window) {  // This packet has a time stamp before the earliest open sub-observation
-          UDP_removed_from_buff++;              // Throw it away.  ie flag it as used and release the buffer slot.  We don't want to see it again.
-          continue;                             // start the loop again
+        if ((my_udp->GPS_time & subobs_mask) < start_window) {  // This packet has a time stamp before the earliest open sub-observation
+          UDP_removed_from_buff++;                              // Throw it away.  ie flag it as used and release the buffer slot.  We don't want to see it again.
+          continue;                                             // start the loop again
         }
 
         //---------- Further ahead in time than we're ready for?
-        if (my_udp->GPS_time > end_window) {
+        if ((my_udp->GPS_time & subobs_mask) >= last_wslot + 8) {
           // This packet has a time stamp after the end of the latest open sub-observation.  We need to do some preparatory work before we can process this packet.
 
           // First we need to know if this is simply the next chronological subobs, or if we have skipped ahead.
           // NB that a closedown packet will look like we skipped ahead to 2106.
           // If we've skipped ahead then all current subobs need to be closed.
-          if (end_window == ((my_udp->GPS_time | 0b111) - 8)) {
+          if (last_wslot == ((my_udp->GPS_time & subobs_mask) - 8)) {
             // our proposed new end window is the udp packet's time with the bottom 3 bits all set.
             // If that's (only) 8 seconds after the current end window... then our new start window is (and may already have been)
-            start_window = end_window - 7;            // the beginning of the subobs which was our last subobs a moment ago.
-            end_window   = my_udp->GPS_time | 0b111;  // new end window is the last second of the subobs for the second we just saw, so round up (ie set) the last three bits
-                                                      // Ensure every subobs but the last one are closed
-          } else {                                    // otherwise the packet stream is so far into the future that we need to close *all* open subobs.
-            end_window   = my_udp->GPS_time | 0b111;  // new end window is the last second of the subobs for the second we just saw, so round up (ie set) the last three bits
-            start_window = end_window - 7;            // then our new start window is the beginning second of the subobs for the packet we just saw.
+            start_window = last_wslot;  // the beginning of the subobs which was our last subobs a moment ago.
+            last_wslot   = my_udp->GPS_time & subobs_mask;
+            // Ensure every subobs but the last one are closed
+          } else {  // otherwise the packet stream is so far into the future that we need to close *all* open subobs.
+            last_wslot   = my_udp->GPS_time & subobs_mask;
+            start_window = last_wslot;  // then our new start window is the beginning second of the subobs for the packet we just saw.
           }
 
           for (int loop = 0; loop < SUB_SLOTS; loop++) {  // check all subobs meta slots. If they're too old we'll rule them off. NB this may not be checked in time order of subobs
@@ -1093,6 +1095,7 @@ void *UDP_parse() {
             }
           }
 
+          // TODO - find out if we even use this feature any more!!
           if (my_udp->GPS_time == CLOSEDOWN) {  // If we've been asked to close down via a udp packet with the time set to the year 2106
             terminate = TRUE;                   // tell everyone to shut down.
             UDP_removed_from_buff++;            // Flag it as used and release the buffer slot.  We don't want to see it again.
