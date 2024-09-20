@@ -1153,8 +1153,8 @@ void *UDP_parse() {
 
           sub[slot_ndx].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
           sub[slot_ndx].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
-          sub[slot_ndx].state =
-              1;  // Let's remember we're using this slot now and tell other threads.  NB: The subobs field is assumed to have been populated *before* this becomes 1
+          sub[slot_ndx].state     = 1;                      // Let's remember we're using this slot now and tell other threads.
+                                                            // NB: The subobs field is assumed to have been populated *before* this becomes 1
         }
 
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
@@ -1653,7 +1653,6 @@ void add_meta_fits() {
 
   int loop;
   int subobs_ready2write;
-  int meta_result;  // Temp storage for the result before we write it back to the array for others to see.  Once we do that, we can't change our mind.
   BOOL go4meta;
 
   subobs_udp_meta_t *subm;  // pointer to the sub metadata array I'm working on
@@ -1688,19 +1687,12 @@ void add_meta_fits() {
 
     subobs_ready2write = -1;  // Start by assuming there's nothing to do
 
-    for (loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
-
-      if ((sub[loop].state == 1) && (sub[loop].meta_done == 0)) {  // If this sub is ready to have M&C metadata added
-
-        if (subobs_ready2write == -1) {  // check if we've already found a different one to do and if we haven't
-
-          subobs_ready2write = loop;  // then mark this one as the best so far
-
-        } else {  // otherwise we need to work out
-
-          if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
-            subobs_ready2write = loop;                              // in which case, mark this one as the best so far
-          }
+    for (loop = 0; loop < SUB_SLOTS; loop++) {                           // Look through all four subobs meta arrays
+      if ((sub[loop].state == 1) && (sub[loop].meta_done == 0)) {        // If this sub is ready to have M&C metadata added
+        if (subobs_ready2write == -1) {                                  // check if we've already found a different one to do and if we haven't
+          subobs_ready2write = loop;                                     // then mark this one as the best so far
+        } else if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
+          subobs_ready2write = loop;                                     // then mark this one as the best so far
         }
       }
     }  // We left this loop with an index to the best sub to do or a -1 if none available.
@@ -1731,8 +1723,6 @@ void add_meta_fits() {
                              ((started_meta_write_time.tv_nsec - ended_meta_write_time.tv_nsec) / 1000000);  // msec since the last metafits processed
 
       subm->meta_done = 2;  // Record that we're working on this one!
-
-      meta_result = 5;  // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
       go4meta = TRUE;  // All good so far
 
@@ -1878,7 +1868,6 @@ void add_meta_fits() {
             printf("\n");
           }  // Only see this if we're in debug mode
         }
-        meta_result = 4;
       }
 
       //---------- And we're basically done reading the metafits and preping for the sub file write which is only a few second away (done by another thread)
@@ -1889,10 +1878,6 @@ void add_meta_fits() {
                              ((ended_meta_write_time.tv_nsec - started_meta_write_time.tv_nsec) / 1000000);  // msec since this sub started
 
       subm->meta_done = go4meta ? 4 : 5;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
-
-      if (meta_result != subm->meta_done) {
-        printf("LOGIC ERROR: meta_result=%d but subm->meta_done=%d (go4meta=%s)\n", meta_result, subm->meta_done, (go4meta ? "true" : "false"));
-      }
 
       if (go4meta) {
         report_substatus("add_meta_fits", "subobs %d slot %d. Read metafits successfully.", subm->subobs, subobs_ready2write);
@@ -2297,9 +2282,8 @@ void *makesub() {
         if (rename(conf.temp_file_name, dest_file) != -1) {  // Rename my temporary file to a final sub file name, thus releasing it to other programs
           sub_result = 4;                                    // This was our last check.  If we got to here, the sub file worked, so prepare to write that to monitoring system
         } else {
-          sub_result = 10;                   // This was our last check.  If we got to here, the sub file rename failed, so prepare to write that to monitoring system
-          printf("Final rename failed.\n");  // but if that fails, I'm not really sure what to do.  Let's just note it and see if it ever happens
-          fflush(stdout);
+          printf("Final rename failed.\n");  // This was our last check.  If we got to here, the sub file rename failed, so prepare to write that to monitoring system
+          fflush(stdout);                    // but if that fails, I'm not really sure what to do.  Let's just note it and see if it ever happens
         }
 
       }  // We've finished the sub file writing and closed and renamed the file.
