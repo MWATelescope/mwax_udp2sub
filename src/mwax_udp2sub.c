@@ -543,8 +543,6 @@ typedef struct data_section {
 // These variables are shared by all threads.  "file scope"
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
-#define CLOSEDOWN (0xFFFFFFFF)
-
 volatile BOOL terminate         = FALSE;  // Global request for everyone to close down
 volatile BOOL UDP_recv_complete = FALSE;  // UDP_recv has closed down successfully.
 
@@ -1104,13 +1102,6 @@ void *UDP_parse() {
                 report_substatus("UDP_parse", "subobs %d slot %d. Not abandoning as it's still reading its metafits (wut).", sub[loop].subobs, loop);
               }
             }
-          }
-
-          // TODO - remove this, nobody was even aware that this was a feature.
-          if (my_udp->GPS_time == CLOSEDOWN & subobs_mask) {  // If we've been asked to close down via a udp packet with the time set to the year 2106
-            terminate = TRUE;                                 // tell everyone to shut down.
-            UDP_removed_from_buff++;                          // Flag it as used and release the buffer slot.  We don't want to see it again.
-            continue;  // This will take us out to the while !terminate loop that will shut us down.  (Could have used a break too. It would have the same effect)
           }
 
           // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
