@@ -1117,12 +1117,10 @@ void *UDP_parse() {
               if (sub[loop].subobs == (start_window - 8)) {  // then if it's a very recent subobs (which is what we'd expect during normal operations)
                 sub[loop].state = 2;                         // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
                 report_substatus("UDP_parse", "subobs %d slot %d. Requesting write (setting state to 2).", sub[loop].subobs, loop);
-              } else if (sub[loop].meta_done != 2) {  // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
-                sub[loop].state = 6;                  // but we can only do that if we're not currently trying to load its metafits. If not,
-                monitor.discarded_subobs++;           // set the state flag to indicate that this subobs should be abandoned as too old to be useful
+              } else {                       // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
+                sub[loop].state = 6;         // set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                monitor.discarded_subobs++;  // note that this is just a request - the slot isn't really free until we've also finished reading the metafits
                 report_substatus("UDP_parse", "subobs %d slot %d. Abandoning (setting state to 6).", sub[loop].subobs, loop);
-              } else {
-                report_substatus("UDP_parse", "subobs %d slot %d. Not abandoning as it's still reading its metafits (wut).", sub[loop].subobs, loop);
               }
             }
           }
@@ -1131,8 +1129,9 @@ void *UDP_parse() {
           // sub writing threads
           slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
                                                       // our index into the subobs metadata array
-          if (sub[slot_ndx].state >= 4) {
-            // If the state is a 4 or 5 or higher, then it's free for reuse, but someone needs to wipe the contents.  I guess that 'someone' means me!
+          if (sub[slot_ndx].state >= 4 && sub[slot_ndx].meta_done != 2) {
+            // If the state is a 4 or higher, and we're not currently reading the metafits, then it's free for reuse,
+            // but someone needs to wipe the contents.  I guess that 'someone' means me!
             report_substatus("UDP_parse", "subobs %d slot %d. First new packet, clearing slot.", my_udp->GPS_time, slot_ndx);
 
             subobs_udp_meta_t *ts = &sub[slot_ndx];
