@@ -1078,11 +1078,22 @@ void *UDP_parse() {
 
         my_udp->GPS_time &= subobs_mask;
         my_udp->packet_type = 0x21;  // Now change the packet type to a 0x21 to say it's similar to a 0x20 but in host byte order and with a subobs timestamp
+      }
 
-      }  // If is wasn't a 0x20 packet, the only other packet we handle is a 0x21
-      else if (my_udp->packet_type != 0x21) {  // This packet is not a valid packet for us.
-        UDP_removed_from_buff++;               // Flag it as used and release the buffer slot.  We don't want to see it again.
-        continue;                              // start the loop again
+      uint32_t now = 0;
+      {
+        struct timespec this_time;
+        clock_gettime(CLOCK_REALTIME, &this_time);
+        now = (this_time.tv_sec - GPS_offset);
+      }
+
+      if ((my_udp->packet_type != 0x21) ||  // wrong packet type
+          (my_udp->GPS_time < now - 32) ||  // packet almost certainly has a bad timestamp
+          (my_udp->GPS_time > now + 9)      // Note that this validly be for the near future if we're writing a margin packet into next subobs
+      ) {                                   // This packet is not a valid packet for us.
+        report_substatus("UDP_parse", "rejecting packet (packet_type=0x02x, subobs=%d, rf_input=%d, now=%d)", my_udp->packet_type, my_udp->GPS_time, my_udp->rf_input, now);
+        UDP_removed_from_buff++;  // Flag it as used and release the buffer slot.  We don't want to see it again.
+        continue;                 // start the loop again
       }
 
       //---------- If this packet is for the same sub obs as the previous packet, we can assume a bunch of things haven't changed or rolled over, otherwise we have things to check
@@ -1176,7 +1187,7 @@ void *UDP_parse() {
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
         this_sub = &sub[((my_udp->GPS_time >> 3) & 0b11)];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
                                                             // the subobs metadata array which we use to get the pointer to the struct
-        last_good_packet_sub_time = my_udp->GPS_time;       // Remember this so next packet we proabably don't need to do these checks and lookups again
+        last_good_packet_sub_time = my_udp->GPS_time;       // Remember this so next packet we probably don't need to do these checks and lookups again
       }
 
       //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
