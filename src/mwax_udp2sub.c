@@ -2084,6 +2084,7 @@ void *makesub() {
         free_files     = 0;               // So far, we haven't found any available free files we can reuse
         bad_free_files = 0;               // nor any free files that we *can't* use (wrong size?)
 
+        size_t last_seen_size = 0;
         while ((dp = readdir(dir)) != NULL) {                      // Read an entry and while there are still directory entries to look at
           if ((dp->d_type == DT_REG) && (dp->d_name[0] != '.')) {  // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
             if (((len_filename = strlen(dp->d_name)) >= 5) &&
@@ -2091,7 +2092,8 @@ void *makesub() {
 
               sprintf(this_file, "%s/%s", conf.shared_mem_dir, dp->d_name);  // Construct the full file name including path
               if (stat(this_file, &filestats) == 0) {                        // Try to read the file statistics and if they are available
-                if (filestats.st_size == desired_size) {                     // If the file is exactly the size we need
+                last_seen_size = filestats.st_size;
+                if (filestats.st_size == desired_size) {  // If the file is exactly the size we need
 
                   // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
 
@@ -2110,6 +2112,10 @@ void *makesub() {
           }
         }
         closedir(dir);
+        if (!go4sub) {
+          report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %d to use for subfile. (last size seen = %d)", sub[subobs_ready2write].subobs,
+                           subobs_ready2write, desired_size, last_seen_size);
+        }
       }
 
       //---------- Try to mmap that file (assuming we found one) so we can treat it like RAM (which it actually is) ----------
@@ -2868,8 +2874,7 @@ int main(int argc, char **argv) {
 
   printf("\n");  // Blank line
 
-  mwa_udp_packet_t *my_udp;           // Make a local pointer to the UDP packet we're going to be working on.
-  uint32_t subobs_mask = 0xFFFFFFF8;  // Mask to apply with '&' to get sub obs from GPS second
+  mwa_udp_packet_t *my_udp;  // Make a local pointer to the UDP packet we're going to be working on.
 
   INT64 UDP_closelog = UDP_removed_from_buff - 20;  // Go back 20 udp packets
 
