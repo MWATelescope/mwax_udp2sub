@@ -609,19 +609,42 @@ typedef struct udp2sub_config {  // Structure for the configuration of each udp2
 
 udp2sub_config_t conf;  // A place to store the configuration data for this instance of the program.  ie of the 60 copies running on 10 computers or whatever
 
+bool isround(uint64_t x) {  // returns true for numbers whose decimal representation matches [0123468]0*
+  while (x > 10) {
+    if (x % 10 > 0) {
+      return false;
+    }
+    x = x / 10;
+  }
+  return (x < 5 || !(x & 1));
+}
+
 void report_substatus(char *thread_name, char *status, ...);
 void report_substatus(char *thread_name, char *status, ...) {
-  struct timespec this_time;
-  clock_gettime(CLOCK_REALTIME, &this_time);
-  printf("now=%lld.%03d %-15s: ", (INT64)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec / 1000000), thread_name);
-  printf("sub[].(state,meta_done) = [%d.%d %d.%d %d.%d %d.%d] ", sub[0].state, sub[0].meta_done, sub[1].state, sub[1].meta_done, sub[2].state, sub[2].meta_done, sub[3].state,
-         sub[3].meta_done);
-  va_list arguments;
-  va_start(arguments, status);
-  vprintf(status, arguments);
-  va_end(arguments);
-  printf("\n");
-  fflush(stdout);
+  static char *last_status     = NULL;
+  static uint64_t repeat_count = 0;
+  if (status != last_status) {
+    last_status  = status;
+    repeat_count = 0;
+  }
+  repeat_count++;
+
+  if (isround(repeat_count)) {
+    struct timespec this_time;
+    clock_gettime(CLOCK_REALTIME, &this_time);
+    printf("now=%lld.%03d %-15s: ", (INT64)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec / 1000000), thread_name);
+    printf("sub[].(state,meta_done) = [%d.%d %d.%d %d.%d %d.%d] ", sub[0].state, sub[0].meta_done, sub[1].state, sub[1].meta_done, sub[2].state, sub[2].meta_done, sub[3].state,
+           sub[3].meta_done);
+    va_list arguments;
+    va_start(arguments, status);
+    vprintf(status, arguments);
+    va_end(arguments);
+    if (repeat_count > 5) {
+      printf("(%lu repeats)", repeat_count);
+    }
+    printf("\n");
+    fflush(stdout);
+  }
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
