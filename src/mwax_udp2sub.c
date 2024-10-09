@@ -1150,6 +1150,9 @@ void *UDP_parse() {
               memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB * sizeof(char *));
             }
           }  // wipe sub[slot_ndx] to zero
+          else {
+            report_substatus("UDP_parse", "subobs %d slot %d. Packet received but slot not available", my_udp->GPS_time, slot_ndx);
+          }
 
           if (sub[slot_ndx].state != 0) {  // If state isn't 0 now, then it's bad.  We have a transaction to store and the subobs it belongs to can't be set up because its slot is
                                            // still in use by an earlier subobs
