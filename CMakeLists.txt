@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22)
 project(mwax_udb2sub LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
+set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+
 
 set(CMAKE_CXX_FLAGS -O3 -Wall)
 

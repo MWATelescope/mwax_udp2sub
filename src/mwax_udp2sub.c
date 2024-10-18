@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 91
-#define THISVER "2.13"
+#define THISVER "2.13.1"
 //
 // 2.13-091     2024-09-04 CJP  navigate metafits HDUs by name not index, separate out metafits parsing to dedicated function,
 //                              and add more error checks and logging.  Add and apply standard clang-format settings.  First
@@ -1154,10 +1154,10 @@ void *UDP_parse() {
           }
         }
 
-          // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
-          // sub writing threads
-          slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
-                                                      // our index into the subobs metadata array
+        // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
+        // sub writing threads
+        slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
+        // our index into the subobs metadata array
         if (sub[slot_ndx].state == 0) {
           // If the state is a 0, then it's free for reuse,
           report_substatus("UDP_parse", "subobs %d slot %d. First new packet", my_udp->GPS_time, slot_ndx);
@@ -1165,14 +1165,14 @@ void *UDP_parse() {
           sub[slot_ndx].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
           sub[slot_ndx].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
           sub[slot_ndx].state     = 1;                      // Let's remember we're using this slot now and tell other threads.
-                                                            // NB: The subobs field is assumed to have been populated *before* this becomes 1
+          // NB: The subobs field is assumed to have been populated *before* this becomes 1
         }
 
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
         if (sub[slot_ndx].state == 1) {
           this_sub = &sub[slot_ndx];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
-                                                            // the subobs metadata array which we use to get the pointer to the struct
-        last_good_packet_sub_time = my_udp->GPS_time;       // Remember this so next packet we probably don't need to do these checks and lookups again
+          // the subobs metadata array which we use to get the pointer to the struct
+          last_good_packet_sub_time = my_udp->GPS_time;  // Remember this so next packet we probably don't need to do these checks and lookups again
 
         } else {
           // TODO - report this condition in health packet.
@@ -1185,25 +1185,25 @@ void *UDP_parse() {
       }
 
       if (this_sub) {
-      //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
-      rf_ndx = this_sub->rf2ndx[my_udp->rf_input];               // Look up the position in the meta array we are using for this rf input (for this sub).
-      if (rf_ndx == 0) {                                         // this is the first time we've seen one this sub from this rf input
-        this_sub->rf_seen++;                                     // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
-        this_sub->rf2ndx[my_udp->rf_input] = this_sub->rf_seen;  // and assign that number for this rf input's metadata index
-        rf_ndx                             = this_sub->rf_seen;  // and get the correct index for this packet too because we'll need that
-      }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
+        //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
+        rf_ndx = this_sub->rf2ndx[my_udp->rf_input];               // Look up the position in the meta array we are using for this rf input (for this sub).
+        if (rf_ndx == 0) {                                         // this is the first time we've seen one this sub from this rf input
+          this_sub->rf_seen++;                                     // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
+          this_sub->rf2ndx[my_udp->rf_input] = this_sub->rf_seen;  // and assign that number for this rf input's metadata index
+          rf_ndx                             = this_sub->rf_seen;  // and get the correct index for this packet too because we'll need that
+        }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
 
-      this_sub->udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
-      // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in
-      // which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs. By this stage, seconds and subsecs have been merged into a single
-      // number so subsec time is already in the range 0 to 5001
+        this_sub->udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
+        // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in
+        // which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs. By this stage, seconds and subsecs have been merged into a single
+        // number so subsec time is already in the range 0 to 5001
 
-      this_sub->last_udp =
-          UDP_removed_from_buff;  // This was the last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain there
+        this_sub->last_udp =
+            UDP_removed_from_buff;  // This was the last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain there
         this_sub
             ->udp_count++;  // Add one to the number of udp packets seen this sub obs.  NB Includes duplicates and faked delay packets so can't reliably be used to check if we're
-                              // finished a sub
-      monitor.udp_count++;
+        // finished a sub
+        monitor.udp_count++;
       }
 
       //---------- We are done with this packet, EXCEPT if this was the very first for an rf_input for a subobs, or the very last, then we want to duplicate them in the adjacent
@@ -1710,7 +1710,7 @@ void add_meta_fits() {
 
     subobs_ready2write = -1;  // Start by assuming there's nothing to do
 
-    for (loop = 0; loop < SUB_SLOTS; loop++) {                           // Look through all four subobs meta arrays
+    for (loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
 
       if ((sub[loop].state == 1 || sub[loop].state == 2) &&  //(state should never reach 2 while meta_done is 0, but just in case..
           (sub[loop].meta_done == 0)) {                      // If this sub is ready to have M&C metadata added
@@ -1720,7 +1720,7 @@ void add_meta_fits() {
         } else if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
           subobs_ready2write = loop;                                     // then mark this one as the most urgent
         }
-        }
+      }
       if ((sub[loop].state == 6) && (sub[loop].meta_done == 0)) {  // If we are in the process of abandoning this slot, but haven't started reading metadata yet
         sub[loop].meta_done = 6;                                   // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
       }
