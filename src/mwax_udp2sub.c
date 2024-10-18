@@ -1026,6 +1026,21 @@ void *UDP_recv() {
   pthread_exit(NULL);
 }
 
+void clear_slot(subobs_udp_meta_t *ts) {  // TODO - fix race condition where state becomes zero ('ready to use') before clearing is complete.
+  static char **voltage_save[MAX_INPUTS + 1];
+  for (int i = 0; i < MAX_INPUTS + 1; i++) {
+    voltage_save[i] = ts->udp_volts[i];
+    memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB * sizeof(char *));  // TODO - allocate a single buffer per slot so we can drop down to one memset call
+  }
+
+  // Among other things, like wiping the array of pointers back to NULL, this memset sets the value of 'state' back to 0.
+  memset(ts, 0, sizeof(subobs_udp_meta_t));
+
+  for (int i = 0; i < MAX_INPUTS + 1; i++) {
+    ts->udp_volts[i] = voltage_save[i];
+  }
+}
+
 //------------------------------------------------------------------------------------------------------------------------------------------------------
 // UDP_parse - Check UDP packets as they arrive and update the array of pointers to them so we can later address them in sorted order
 //------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1091,7 +1106,8 @@ void *UDP_parse() {
           (my_udp->GPS_time < now - 32) ||  // packet almost certainly has a bad timestamp
           (my_udp->GPS_time > now + 9)      // Note that this validly be for the near future if we're writing a margin packet into next subobs
       ) {                                   // This packet is not a valid packet for us.
-        report_substatus("UDP_parse", "rejecting packet (packet_type=0x02x, subobs=%d, rf_input=%d, now=%d)", my_udp->packet_type, my_udp->GPS_time, my_udp->rf_input, now);
+        report_substatus("UDP_parse", "rejecting packet (packet_type=0x02x, subobs=%d, rf_input=%d, now=%d, edt2udp_token=%d", my_udp->packet_type, my_udp->GPS_time,
+                         my_udp->rf_input, now, my_udp->edt2udp_token);
         UDP_removed_from_buff++;  // Flag it as used and release the buffer slot.  We don't want to see it again.
         continue;                 // start the loop again
       }
@@ -1104,6 +1120,7 @@ void *UDP_parse() {
           continue;                             // start the loop again
         }
 
+        // TODO - continue updating window even if we don't get any packets for a few seconds.
         //---------- Further ahead in time than we're ready for?
         if (my_udp->GPS_time > end_window) {
           // This packet has a time stamp after the end of the latest open sub-observation.  We need to do some preparatory work before we can process this packet.
@@ -1135,48 +1152,15 @@ void *UDP_parse() {
               }
             }
           }
+        }
 
           // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
           // sub writing threads
           slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
                                                       // our index into the subobs metadata array
-          if (sub[slot_ndx].state >= 4 && sub[slot_ndx].meta_done != 2) {
-            // If the state is a 4 or higher, and we're not currently reading the metafits, then it's free for reuse,
-            // but someone needs to wipe the contents.  I guess that 'someone' means me!
-            report_substatus("UDP_parse", "subobs %d slot %d. First new packet, clearing slot.", my_udp->GPS_time, slot_ndx);
-
-            subobs_udp_meta_t *ts = &sub[slot_ndx];
-
-            static char **voltage_save[MAX_INPUTS + 1];
-            for (int i = 0; i < MAX_INPUTS + 1; i++) {
-              voltage_save[i] = ts->udp_volts[i];
-            }
-
-            // Among other things, like wiping the array of pointers back to NULL, this memset should set the value of 'state' back to 0.
-            memset(&sub[slot_ndx], 0, sizeof(subobs_udp_meta_t));
-
-            for (int i = 0; i < MAX_INPUTS + 1; i++) {
-              ts->udp_volts[i] = voltage_save[i];
-              memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB * sizeof(char *));
-            }
-          }  // wipe sub[slot_ndx] to zero
-          else {
-            report_substatus("UDP_parse", "subobs %d slot %d. Packet received but slot not available", my_udp->GPS_time, slot_ndx);
-          }
-
-          if (sub[slot_ndx].state != 0) {  // If state isn't 0 now, then it's bad.  We have a transaction to store and the subobs it belongs to can't be set up because its slot is
-                                           // still in use by an earlier subobs
-            printf("Error: Subobs slot %d still in use. Currently in state %d.\n", slot_ndx, sub[slot_ndx].state);
-            // If this actually happens during normal operation, we will need to fix the cause or (maybe) bandaid it with a delay here, but for now
-            printf("Wanted to put subobs=%d, first=%lld, state=1\n", my_udp->GPS_time, UDP_removed_from_buff);
-            printf("Found so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n", sub[slot_ndx].subobs, sub[slot_ndx].state,
-                   sub[slot_ndx].msec_wait, sub[slot_ndx].msec_took, sub[slot_ndx].first_udp, sub[slot_ndx].last_udp, sub[slot_ndx].udp_at_start_write,
-                   sub[slot_ndx].udp_at_end_write, sub[slot_ndx].udp_count, sub[slot_ndx].rf_seen);
-            fflush(stdout);
-            raise(SIGABRT);    // For debugging, let's just crash here so we can get a core dump
-            terminate = TRUE;  // Lets make a fatal error so we know we'll spot it
-            continue;          // abort what we're attempting and all go home
-          }  // abort
+        if (sub[slot_ndx].state == 0) {
+          // If the state is a 0, then it's free for reuse,
+          report_substatus("UDP_parse", "subobs %d slot %d. First new packet", my_udp->GPS_time, slot_ndx);
 
           sub[slot_ndx].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
           sub[slot_ndx].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
@@ -1185,13 +1169,23 @@ void *UDP_parse() {
         }
 
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
-        this_sub = &sub[((my_udp->GPS_time >> 3) & 0b11)];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
+        if (sub[slot_ndx].state == 1) {
+          this_sub = &sub[slot_ndx];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
                                                             // the subobs metadata array which we use to get the pointer to the struct
         last_good_packet_sub_time = my_udp->GPS_time;       // Remember this so next packet we probably don't need to do these checks and lookups again
+
+        } else {
+          // TODO - report this condition in health packet.
+          // Note that it will already show up as increased packet loss though, so priority on additional reporting is not high.
+          report_substatus("UDP_parse", "subobs %d slot %d. Packet received but slot not available", my_udp->GPS_time, slot_ndx);
+          this_sub = NULL;
+          // the subobs metadata array which we use to get the pointer to the struct
+          last_good_packet_sub_time = -1;
+        }
       }
 
+      if (this_sub) {
       //---------- We have a udp packet to add and a place for it to go.  Time to add its details to the sub obs metadata
-
       rf_ndx = this_sub->rf2ndx[my_udp->rf_input];               // Look up the position in the meta array we are using for this rf input (for this sub).
       if (rf_ndx == 0) {                                         // this is the first time we've seen one this sub from this rf input
         this_sub->rf_seen++;                                     // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
@@ -1206,9 +1200,11 @@ void *UDP_parse() {
 
       this_sub->last_udp =
           UDP_removed_from_buff;  // This was the last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain there
-      this_sub->udp_count++;  // Add one to the number of udp packets seen this sub obs.  NB Includes duplicates and faked delay packets so can't reliably be used to check if we're
+        this_sub
+            ->udp_count++;  // Add one to the number of udp packets seen this sub obs.  NB Includes duplicates and faked delay packets so can't reliably be used to check if we're
                               // finished a sub
       monitor.udp_count++;
+      }
 
       //---------- We are done with this packet, EXCEPT if this was the very first for an rf_input for a subobs, or the very last, then we want to duplicate them in the adjacent
       // subobs.
@@ -1715,12 +1711,18 @@ void add_meta_fits() {
     subobs_ready2write = -1;  // Start by assuming there's nothing to do
 
     for (loop = 0; loop < SUB_SLOTS; loop++) {                           // Look through all four subobs meta arrays
-      if ((sub[loop].state == 1) && (sub[loop].meta_done == 0)) {        // If this sub is ready to have M&C metadata added
+
+      if ((sub[loop].state == 1 || sub[loop].state == 2) &&  //(state should never reach 2 while meta_done is 0, but just in case..
+          (sub[loop].meta_done == 0)) {                      // If this sub is ready to have M&C metadata added
+
         if (subobs_ready2write == -1) {                                  // check if we've already found a different one to do and if we haven't
           subobs_ready2write = loop;                                     // then mark this one as the best so far
         } else if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
-          subobs_ready2write = loop;                                     // then mark this one as the best so far
+          subobs_ready2write = loop;                                     // then mark this one as the most urgent
         }
+        }
+      if ((sub[loop].state == 6) && (sub[loop].meta_done == 0)) {  // If we are in the process of abandoning this slot, but haven't started reading metadata yet
+        sub[loop].meta_done = 6;                                   // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
       }
     }  // We left this loop with an index to the best sub to do or a -1 if none available.
 
@@ -2013,6 +2015,12 @@ void *makesub() {
             subobs_ready2write = loop;                              // in which case, mark this one as the best so far
           }
         }
+      } else if ((sub[loop].state == 2 && sub[loop].meta_done == 5) ||  // failed to read metadata
+                 (sub[loop].state == 4 || sub[loop].state == 5) ||      // finished attempting makesub
+                 (sub[loop].state == 6 && sub[loop].meta_done > 4)      // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
+      ) {
+        report_substatus("makesub", "subobs %d slot %d. Clearing slot, as we've finished with it", sub[loop].subobs, loop);
+        clear_slot(&sub[loop]);
       }
     }  // We left this loop with an index to the best sub to write or a -1 if none available.
 

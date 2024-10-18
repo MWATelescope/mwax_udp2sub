@@ -14,18 +14,15 @@ Upon a new packet arriving that belongs to a different subobs to the previous pa
 and `end_window`),
  then for any slot in `state` 1 that's no longer in the window:
 - if it was for the subobservation immediately before the new window, it transitions to `state` 2 (request subfile write)
-- If it's older, and not currently reading metafits it transitions to `state` 6 (abandon)
+- If it's older, it transitions to `state` 6 (mark for abandonment, pending metafits read completion)
 
-The first time a packet arrives for a new slot, the slot is cleared, iff `state`>=4
-(which in turn sets both `state` and `meta_done` to zero)
-then if `state` is zero, it's set to 1 just after initialising the `subobs` field
+The first time a packet arrives for a new slot, the slot is marked as being for that subobs, iff `state`==0
+
 
 ```
-1._ -> 2._         # request subfile write. This is the transition for recent packets
-1.[^2] -> 6._      # abandon.  (note that if we miss this window it could get stuck)
-
-[456._] -> 0.0     # free the slot (but we should probably check if add_meta_fits has finished with it)
 0._ -> 1._         # mark as receiving packets
+1._ -> 2._         # request subfile write. This is the transition for recent packets
+1._ -> 6._         # abandon.
 ```
 
 ### add_meta_fits()
@@ -36,7 +33,8 @@ to read the metafile, then sets `meta_done` to 4 or 5 depending on whether the
 metadata acquisition was successful.
 
 ```
-1.0 -> _.2         # enter metafits reading state (but after this we should check state has not become 4 or 5 before continuing)
+[12].0 -> _.2      # enter metafits reading state (but after this we check state has not become 6 before continuing)
+6.0 -> _.6         # let makesub know it's safe to free the slot.
 _.2 -> _.[45]      # exit metafits reading state
 ```
 
@@ -46,8 +44,22 @@ Then it attempts to write out a subfile for the oldest such slot, setting `state
 to indicate it's working on it, then on completion
 sets the `state` to 4 or 5 (depending on whether it succeeded or failed)
 
+the slot is cleared once writing is complete, or if the slot needs abandoning
+(metafits failed, or slot too old)
+
 ```
-2.4 -> 3.4      # record that subfile is a WIP
-3.4 -> [45].4   # subfile writing succeeded/failed
+2.4 -> 3.4        # record that subfile is a WIP
+3.4 -> [45].4     # subfile writing succeeded/failed
+                  
+[45].4 -> 0.0     # free the slot  (subfile write complete)
+4.5 -> 0.0        # free the slot (metafits read failed)
+6.[456] -> 0.0    # free the slot (abandonment requested)
 ```
+
+## standard compatibility
+
+I'm planning on moving the state variables to C atomics, which requires at least C11.
+The only difference between C11 and C17 in that regard is the deprecation of ATOMIC_VAR_INIT,
+so we specify C17 to ensure we don't use that.
+(C17 was generally speaking a bugfix release anyway)
 
