@@ -483,8 +483,8 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int udp_count;  // The number of udp packets collected from the NIC
   int udp_dummy;  // The number of dummy packets we needed to insert to pad things out
 
-  int meta_msec_wait;      // The number of milliseconds it took to from reading the last metafits to finding a new one
-  int meta_msec_took;      // The number of milliseconds it took to read the metafits
+  int meta_msec_wait;  // The number of milliseconds it took to from reading the last metafits to finding a new one
+  int meta_msec_took;  // The number of milliseconds it took to read the metafits
 
   INT64 GPSTIME;  // Following fields are straight from the metafits file (via the metabin) This is the GPSTIME *FOR THE OBS* not the subobs!!!
   int EXPOSURE;
@@ -1062,7 +1062,7 @@ void *UDP_parse() {
   uint32_t end_window   = 0;  // the newest subobservation page of current window (equal to old "end_window"-7).  Recalc window when we receive a packet for a later page.
 
   int slot_index;  // index into which of the 4 subobs metadata blocks we want
-  int rf_ndx;    // index into the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on a different sub.
+  int rf_ndx;      // index into the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on a different sub.
 
   subobs_udp_meta_t *this_sub = NULL;  // Pointer to the relevant one of the four subobs metadata arrays
 
@@ -1725,7 +1725,7 @@ void add_meta_fits() {
     //---------- if we don't have one ----------
 
     if (slot_index == -1) {  // if there is nothing to do
-      usleep(100000);                // Chill for a longish time.  NO point in checking more often than a couple of times a second.
+      usleep(100000);        // Chill for a longish time.  NO point in checking more often than a couple of times a second.
       ticks_waited += 1;
       if (ticks_waited % (10 * 6) == 0) {  // every few seconds
         report_substatus("add_meta_fits", "waiting");
@@ -2002,11 +2002,11 @@ void *makesub() {
 
     slot_index = -1;  // Start by assuming there's nothing to write out
 
-    for (loop = 0; loop < 4; loop++) {                              // Look through all four subobs meta arrays
+    for (loop = 0; loop < 4; loop++) {                       // Look through all four subobs meta arrays
       if (slot_state[loop] == 2 && meta_state[loop] == 4) {  // If this sub is ready to write out
         if (slot_index == -1) {                              // check if we've already found a different one to write out and if we haven't
           slot_index = loop;                                 // then mark this one as the best so far
-        } else {                                                    // otherwise we need to work out
+        } else {                                             // otherwise we need to work out
           if (sub[slot_index].subobs > sub[loop].subobs) {   // if that other one was for a later sub than this one
             slot_index = loop;                               // in which case, mark this one as the best so far
           }
@@ -2023,7 +2023,7 @@ void *makesub() {
     }  // We left this loop with an index to the best sub to write or a -1 if none available.
 
     if (slot_index == -1) {  // if there is nothing to do
-      usleep(20000);                 // Chillax for a bit.
+      usleep(20000);         // Chillax for a bit.
       ticks_waited += 1;
       if (ticks_waited % (50 * 5) == 0) {  // every few secpnds
         report_substatus("makesub", "waiting");
@@ -2040,9 +2040,9 @@ void *makesub() {
       subm->msec_wait = ((started_sub_write_time.tv_sec - ended_sub_write_time.tv_sec) * 1000) +
                         ((started_sub_write_time.tv_nsec - ended_sub_write_time.tv_nsec) / 1000000);  // msec since the last sub ending
       subm->udp_at_start_write =
-          UDP_added_to_buff;  // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
+          UDP_added_to_buff;       // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
       slot_state[slot_index] = 3;  // Record that we're working on this one!
-      sub_result  = 5;        // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
+      sub_result             = 5;  // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
       //---------- Do some last-minute metafits work to prepare ----------
 
