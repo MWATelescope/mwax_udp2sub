@@ -378,10 +378,6 @@ typedef struct udp2sub_monitor {   // Health packet data
 // mon->sub_write_sleeps++;                                        // record we went to sleep
 // mon->sub_write_dummy++;                                         // record we needed to use the dummy packet to fill in for a missing udp packet
 
-//        printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n",
-//            (INT64)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took,
-//            subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs );
-
 #pragma pack(pop)  // Set the structure packing back to 'normal' whatever that is
 
 //---------------- internal structure definitions --------------------
@@ -475,7 +471,6 @@ typedef struct delay_table_entry {
 typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets
 
   volatile uint32_t subobs;  // The sub observation number.  ie the GPS time of the first second in this sub-observation
-  volatile int state;  // 0==Empty, 1==Adding udp packets, 2==closed off ready for sub write, 3==sub write in progress, 4==sub write complete and ready for reuse, >=5 is failed
 
   int msec_wait;  // The number of milliseconds the sub write thread had waited doing nothing before starting to write out this sub.  Only valid for state = 3 or 4 or 5 or higher
   int msec_took;  // The number of milliseconds the sub write thread took to write out this sub.  Only valid for state = 4 or 5 or higher
@@ -488,7 +483,6 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int udp_count;  // The number of udp packets collected from the NIC
   int udp_dummy;  // The number of dummy packets we needed to insert to pad things out
 
-  volatile int meta_done;  // Has metafits data been appended to this sub observation yet?  0 == No.
   int meta_msec_wait;      // The number of milliseconds it took to from reading the last metafits to finding a new one
   int meta_msec_took;      // The number of milliseconds it took to read the metafits
 
@@ -556,6 +550,9 @@ struct mmsghdr *msgvecs;
 struct iovec *iovecs;
 mwa_udp_packet_t *UDPbuf;
 udp2sub_monitor_t monitor;
+
+volatile int slot_state[4] = {0};  // 0: free, 1: collecting packets, 2: ready to write, 3: write in progress, 4/5: write succeeded/failed, 6: marked for abandonment
+volatile int meta_state[4] = {0};  // 0: free, 2: metafits read in progress, 4/5: metafits read succeeded/failed
 
 subobs_udp_meta_t *sub;  // Pointer to the four subobs metadata arrays
 char *blank_sub_line;    // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
@@ -633,8 +630,8 @@ void report_substatus(char *thread_name, char *status, ...) {
     struct timespec this_time;
     clock_gettime(CLOCK_REALTIME, &this_time);
     printf("now=%lld.%03d %-15s: ", (INT64)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec / 1000000), thread_name);
-    printf("sub[].(state,meta_done) = [%d.%d %d.%d %d.%d %d.%d] ", sub[0].state, sub[0].meta_done, sub[1].state, sub[1].meta_done, sub[2].state, sub[2].meta_done, sub[3].state,
-           sub[3].meta_done);
+    printf("(slot.meta)_state = [%d.%d %d.%d %d.%d %d.%d] ", slot_state[0], meta_state[0], slot_state[1], meta_state[1], slot_state[2], meta_state[2], slot_state[3],
+           meta_state[3]);
     va_list arguments;
     va_start(arguments, status);
     vprintf(status, arguments);
@@ -1026,7 +1023,7 @@ void *UDP_recv() {
   pthread_exit(NULL);
 }
 
-void clear_slot(subobs_udp_meta_t *ts) {  // TODO - fix race condition where state becomes zero ('ready to use') before clearing is complete.
+void clear_slot(subobs_udp_meta_t *ts) {
   static char **voltage_save[MAX_INPUTS + 1];
   for (int i = 0; i < MAX_INPUTS + 1; i++) {
     voltage_save[i] = ts->udp_volts[i];
@@ -1064,7 +1061,7 @@ void *UDP_parse() {
   uint32_t start_window = 0;  // the oldest subobservation we're accepting packets for.
   uint32_t end_window   = 0;  // the newest subobservation page of current window (equal to old "end_window"-7).  Recalc window when we receive a packet for a later page.
 
-  int slot_ndx;  // index into which of the 4 subobs metadata blocks we want
+  int slot_index;  // index into which of the 4 subobs metadata blocks we want
   int rf_ndx;    // index into the position in the meta array we are using for this rf input (for this sub).  NB May be different for the same rf on a different sub.
 
   subobs_udp_meta_t *this_sub = NULL;  // Pointer to the relevant one of the four subobs metadata arrays
@@ -1073,7 +1070,6 @@ void *UDP_parse() {
 
   //---------------- Main loop to process incoming udp packets -------------------
 
-  // TODO - sanity check timestamps on incoming packets, log and discard any that are clearly garbage
   while (!terminate) {
     if (UDP_removed_from_buff < UDP_added_to_buff) {            // If there is at least one packet waiting to be processed
       mwa_udp_packet_t *my_udp;                                 // Make a local pointer to the UDP packet we're working on
@@ -1140,13 +1136,13 @@ void *UDP_parse() {
           }
 
           for (int loop = 0; loop < SUB_SLOTS; loop++) {  // check all subobs meta slots. If they're too old we'll rule them off. NB this may not be checked in time order of subobs
-            if ((sub[loop].subobs < start_window) && (sub[loop].state == 1)) {
+            if ((sub[loop].subobs < start_window) && (slot_state[loop] == 1)) {
               // If this sub obs slot is currently in use by us (ie state==1) and has now reached its timeout ( < start_window )
               if (sub[loop].subobs == (start_window - 8)) {  // then if it's a very recent subobs (which is what we'd expect during normal operations)
-                sub[loop].state = 2;                         // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
+                slot_state[loop] = 2;                        // set the state flag to tell another thread it's their job to write out this subobs and pass the data on down the line
                 report_substatus("UDP_parse", "subobs %d slot %d. Requesting write (setting state to 2).", sub[loop].subobs, loop);
               } else {                       // or if it isn't recent then it's probably because the receivers (or medconv array) went away so we want to abandon it
-                sub[loop].state = 6;         // set the state flag to indicate that this subobs should be abandoned as too old to be useful
+                slot_state[loop] = 6;        // set the state flag to indicate that this subobs should be abandoned as too old to be useful
                 monitor.discarded_subobs++;  // note that this is just a request - the slot isn't really free until we've also finished reading the metafits
                 report_substatus("UDP_parse", "subobs %d slot %d. Abandoning (setting state to 6).", sub[loop].subobs, loop);
               }
@@ -1156,28 +1152,28 @@ void *UDP_parse() {
 
         // We now have a new subobs that we need to set up for.  Hopefully the slot we want to use is either empty or finished with and free for reuse.  If not we've overrun the
         // sub writing threads
-        slot_ndx = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
+        slot_index = (my_udp->GPS_time >> 3) & 0b11;  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits immediately to the left of that.  They will give us
         // our index into the subobs metadata array
-        if (sub[slot_ndx].state == 0) {
+        if (slot_state[slot_index] == 0) {
           // If the state is a 0, then it's free for reuse,
-          report_substatus("UDP_parse", "subobs %d slot %d. First new packet", my_udp->GPS_time, slot_ndx);
+          report_substatus("UDP_parse", "subobs %d slot %d. First new packet", my_udp->GPS_time, slot_index);
 
-          sub[slot_ndx].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
-          sub[slot_ndx].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
-          sub[slot_ndx].state     = 1;                      // Let's remember we're using this slot now and tell other threads.
+          sub[slot_index].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
+          sub[slot_index].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
+          slot_state[slot_index]    = 1;                      // Let's remember we're using this slot now and tell other threads.
           // NB: The subobs field is assumed to have been populated *before* this becomes 1
         }
 
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
-        if (sub[slot_ndx].state == 1) {
-          this_sub = &sub[slot_ndx];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
+        if (slot_state[slot_index] == 1) {
+          this_sub = &sub[slot_index];  // The 3 LSB are 'what second in the subobs' we are.  We want the 2 bits left of that.  They will give us an index into
           // the subobs metadata array which we use to get the pointer to the struct
           last_good_packet_sub_time = my_udp->GPS_time;  // Remember this so next packet we probably don't need to do these checks and lookups again
 
         } else {
           // TODO - report this condition in health packet.
           // Note that it will already show up as increased packet loss though, so priority on additional reporting is not high.
-          report_substatus("UDP_parse", "subobs %d slot %d. Packet received but slot not available", my_udp->GPS_time, slot_ndx);
+          report_substatus("UDP_parse", "subobs %d slot %d. Packet received but slot not available", my_udp->GPS_time, slot_index);
           this_sub = NULL;
           // the subobs metadata array which we use to get the pointer to the struct
           last_good_packet_sub_time = -1;
@@ -1675,7 +1671,7 @@ void add_meta_fits() {
   INT64 mf_obsid;
 
   int loop;
-  int subobs_ready2write;
+  int slot_index;  // slot to read metafits for.
   BOOL go4meta;
 
   subobs_udp_meta_t *subm;  // pointer to the sub metadata array I'm working on
@@ -1708,27 +1704,27 @@ void add_meta_fits() {
 
     //---------- look for a sub which needs metafits info ----------
 
-    subobs_ready2write = -1;  // Start by assuming there's nothing to do
+    slot_index = -1;  // Start by assuming there's nothing to do
 
     for (loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
 
-      if ((sub[loop].state == 1 || sub[loop].state == 2) &&  //(state should never reach 2 while meta_done is 0, but just in case..
-          (sub[loop].meta_done == 0)) {                      // If this sub is ready to have M&C metadata added
+      if ((slot_state[loop] == 1 || slot_state[loop] == 2) &&  //(state should never reach 2 while meta_done is 0, but just in case..
+          (meta_state[loop] == 0)) {                           // If this sub is ready to have M&C metadata added
 
-        if (subobs_ready2write == -1) {                                  // check if we've already found a different one to do and if we haven't
-          subobs_ready2write = loop;                                     // then mark this one as the best so far
-        } else if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
-          subobs_ready2write = loop;                                     // then mark this one as the most urgent
+        if (slot_index == -1) {                                  // check if we've already found a different one to do and if we haven't
+          slot_index = loop;                                     // then mark this one as the best so far
+        } else if (sub[slot_index].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
+          slot_index = loop;                                     // then mark this one as the most urgent
         }
       }
-      if ((sub[loop].state == 6) && (sub[loop].meta_done == 0)) {  // If we are in the process of abandoning this slot, but haven't started reading metadata yet
-        sub[loop].meta_done = 6;                                   // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
+      if ((slot_state[loop] == 6) && (meta_state[loop] == 0)) {  // If we are in the process of abandoning this slot, but haven't started reading metadata yet
+        meta_state[loop] = 6;                                    // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
       }
     }  // We left this loop with an index to the best sub to do or a -1 if none available.
 
     //---------- if we don't have one ----------
 
-    if (subobs_ready2write == -1) {  // if there is nothing to do
+    if (slot_index == -1) {  // if there is nothing to do
       usleep(100000);                // Chill for a longish time.  NO point in checking more often than a couple of times a second.
       ticks_waited += 1;
       if (ticks_waited % (10 * 6) == 0) {  // every few seconds
@@ -1736,7 +1732,7 @@ void add_meta_fits() {
       }
     } else {  // or we have some work to do!  Like a whole metafits file to process!
       ticks_waited = 0;
-      report_substatus("add_meta_fits", "subobs %d slot %d. About to read metafits.", sub[subobs_ready2write].subobs, subobs_ready2write);
+      report_substatus("add_meta_fits", "subobs %d slot %d. About to read metafits.", sub[slot_index].subobs, slot_index);
 
       //---------- but if we *do* have metafits info needing to be read ----------
 
@@ -1746,12 +1742,12 @@ void add_meta_fits() {
 
       clock_gettime(CLOCK_REALTIME, &started_meta_write_time);  // Record the start time before we actually get started.  The clock starts ticking from here.
 
-      subm = &sub[subobs_ready2write];  // Temporary pointer to our sub's metadata array
+      subm = &sub[slot_index];  // Temporary pointer to our sub's metadata array
 
       subm->meta_msec_wait = ((started_meta_write_time.tv_sec - ended_meta_write_time.tv_sec) * 1000) +
                              ((started_meta_write_time.tv_nsec - ended_meta_write_time.tv_nsec) / 1000000);  // msec since the last metafits processed
 
-      subm->meta_done = 2;  // Record that we're working on this one!
+      meta_state[slot_index] = 2;  // Record that we're working on this one!
 
       go4meta = TRUE;  // All good so far
 
@@ -1906,12 +1902,12 @@ void add_meta_fits() {
       subm->meta_msec_took = ((ended_meta_write_time.tv_sec - started_meta_write_time.tv_sec) * 1000) +
                              ((ended_meta_write_time.tv_nsec - started_meta_write_time.tv_nsec) / 1000000);  // msec since this sub started
 
-      subm->meta_done = go4meta ? 4 : 5;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
+      meta_state[slot_index] = go4meta ? 4 : 5;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
       if (go4meta) {
-        report_substatus("add_meta_fits", "subobs %d slot %d. Read metafits successfully.", subm->subobs, subobs_ready2write);
+        report_substatus("add_meta_fits", "subobs %d slot %d. Read metafits successfully.", subm->subobs, slot_index);
       } else {
-        report_substatus("add_meta_fits", "subobs %d slot %d. Failed to read metafits.", subm->subobs, subobs_ready2write);
+        report_substatus("add_meta_fits", "subobs %d slot %d. Failed to read metafits.", subm->subobs, slot_index);
       }
     }  // End of 'if there is a metafits to read' (actually an 'else' off 'is there nothing to do')
   }  // End of huge 'while !terminate' loop
@@ -1959,7 +1955,7 @@ void *makesub() {
   size_t desired_size;  // The total size (including header and zeroth block) that this sub file needs to be
 
   int loop;
-  int subobs_ready2write;
+  int slot_index;  // index of slot to write out
   int left_this_line;
   int sub_result;  // Temp storage for the result before we write it back to the array for others to see.  Once we do that, we can't change our mind.
   BOOL go4sub;
@@ -2004,27 +2000,29 @@ void *makesub() {
 
     //---------- look for a sub to write out ----------
 
-    subobs_ready2write = -1;  // Start by assuming there's nothing to write out
+    slot_index = -1;  // Start by assuming there's nothing to write out
 
     for (loop = 0; loop < 4; loop++) {                              // Look through all four subobs meta arrays
-      if (sub[loop].state == 2 && sub[loop].meta_done == 4) {       // If this sub is ready to write out
-        if (subobs_ready2write == -1) {                             // check if we've already found a different one to write out and if we haven't
-          subobs_ready2write = loop;                                // then mark this one as the best so far
+      if (slot_state[loop] == 2 && meta_state[loop] == 4) {  // If this sub is ready to write out
+        if (slot_index == -1) {                              // check if we've already found a different one to write out and if we haven't
+          slot_index = loop;                                 // then mark this one as the best so far
         } else {                                                    // otherwise we need to work out
-          if (sub[subobs_ready2write].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
-            subobs_ready2write = loop;                              // in which case, mark this one as the best so far
+          if (sub[slot_index].subobs > sub[loop].subobs) {   // if that other one was for a later sub than this one
+            slot_index = loop;                               // in which case, mark this one as the best so far
           }
         }
-      } else if ((sub[loop].state == 2 && sub[loop].meta_done == 5) ||  // failed to read metadata
-                 (sub[loop].state == 4 || sub[loop].state == 5) ||      // finished attempting makesub
-                 (sub[loop].state == 6 && sub[loop].meta_done >= 4)     // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
+      } else if ((slot_state[loop] == 2 && meta_state[loop] == 5) ||  // failed to read metadata
+                 (slot_state[loop] == 4 || slot_state[loop] == 5) ||  // finished attempting makesub
+                 (slot_state[loop] == 6 && meta_state[loop] >= 4)     // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
       ) {
         report_substatus("makesub", "subobs %d slot %d. Clearing slot, as we've finished with it", sub[loop].subobs, loop);
         clear_slot(&sub[loop]);
+        meta_state[loop] = 0;  // TODO - add meta_state 1 so this doesn't become an implicit request before the slot is ready (eg if slot_state was 2 before the clear)
+        slot_state[loop] = 0;
       }
     }  // We left this loop with an index to the best sub to write or a -1 if none available.
 
-    if (subobs_ready2write == -1) {  // if there is nothing to do
+    if (slot_index == -1) {  // if there is nothing to do
       usleep(20000);                 // Chillax for a bit.
       ticks_waited += 1;
       if (ticks_waited % (50 * 5) == 0) {  // every few secpnds
@@ -2034,16 +2032,16 @@ void *makesub() {
     } else {  // or we have some work to do!  Like a whole sub file to write out!
       ticks_waited = 0;
 
-      report_substatus("makesub", "subobs %d slot %d. Starting writing.", sub[subobs_ready2write].subobs, subobs_ready2write);
+      report_substatus("makesub", "subobs %d slot %d. Starting writing.", sub[slot_index].subobs, slot_index);
 
       clock_gettime(CLOCK_REALTIME, &started_sub_write_time);  // Record the start time before we actually get started.  The clock starts ticking from here.
-      subm = &sub[subobs_ready2write];                         // Temporary pointer to our sub's metadata array
+      subm = &sub[slot_index];                                 // Temporary pointer to our sub's metadata array
 
       subm->msec_wait = ((started_sub_write_time.tv_sec - ended_sub_write_time.tv_sec) * 1000) +
                         ((started_sub_write_time.tv_nsec - ended_sub_write_time.tv_nsec) / 1000000);  // msec since the last sub ending
       subm->udp_at_start_write =
           UDP_added_to_buff;  // What's the udp packet number we've received (EVEN IF WE HAVEN'T LOOKED AT IT!) at the time we start to process this sub for writing
-      subm->state = 3;        // Record that we're working on this one!
+      slot_state[slot_index] = 3;  // Record that we're working on this one!
       sub_result  = 5;        // Start by assuming we failed  (ie result==5).  If we get everything working later, we'll swap this for a 4.
 
       //---------- Do some last-minute metafits work to prepare ----------
@@ -2121,8 +2119,8 @@ void *makesub() {
         }
         closedir(dir);
         if (!go4sub) {
-          report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %d to use for subfile. (last size seen = %d)", sub[subobs_ready2write].subobs,
-                           subobs_ready2write, desired_size, last_seen_size);
+          report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %d to use for subfile. (last size seen = %d)", sub[slot_index].subobs, slot_index,
+                           desired_size, last_seen_size);
         }
       }
 
@@ -2339,12 +2337,12 @@ void *makesub() {
       subm->msec_took = ((ended_sub_write_time.tv_sec - started_sub_write_time.tv_sec) * 1000) +
                         ((ended_sub_write_time.tv_nsec - started_sub_write_time.tv_nsec) / 1000000);  // msec since this sub started
 
-      subm->state = sub_result;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
+      slot_state[slot_index] = sub_result;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
-      report_substatus("makesub", "subobs %d slot %d. Finished writing.", sub[subobs_ready2write].subobs, subobs_ready2write);
+      report_substatus("makesub", "subobs %d slot %d. Finished writing.", sub[slot_index].subobs, slot_index);
       printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n", (INT64)(ended_sub_write_time.tv_sec - GPS_offset),
-             subm->subobs, subm->GPSTIME, subm->MODE, subm->state, free_files, bad_free_files, subm->msec_wait, subm->msec_took, subm->udp_at_end_write - subm->first_udp,
-             subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs);
+             subm->subobs, subm->GPSTIME, subm->MODE, slot_state[slot_index], free_files, bad_free_files, subm->msec_wait, subm->msec_took,
+             subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs);
 
       fflush(stdout);
     }
@@ -2511,8 +2509,8 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
 
   subobs_udp_meta_t *subm = &sub[0];
   uint32_t subobs_start   = obs_id + subobs_idx * 8;
-  sub[0].state            = 1;
-  sub[0].meta_done        = 0;
+  slot_state[0]           = 1;
+  meta_state[0]           = 0;
   sub[0].subobs           = subobs_start & ~7;
 
   fprintf(stderr, "obs ID: %d\n", obs_id);
@@ -2528,11 +2526,11 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   pthread_create(&reader_thread, NULL, add_meta_fits_thread, NULL);
   while (!reader_done && time_now.tv_sec - time_start.tv_sec < 5) {
     clock_gettime(CLOCK_REALTIME, &time_now);
-    if (sub[0].meta_done == 4) {
+    if (meta_state[0] == 4) {
       fprintf(stderr, "metadata loaded successfully.\n");
       reader_done = TRUE;
       // reader_success = TRUE;
-    } else if (sub[0].meta_done == 5) {
+    } else if (meta_state[0] == 5) {
       fprintf(stderr, "error loading metadata.\n");
       reader_done = TRUE;
       // reader_success = FALSE;
@@ -2876,8 +2874,8 @@ int main(int argc, char **argv) {
   for (int loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
     subm = &sub[loop];                            // Temporary pointer to our sub's metadata array
 
-    printf("slot=%d,so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n", loop, subm->subobs, subm->state, subm->msec_wait, subm->msec_took,
-           subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->rf_seen);
+    printf("slot=%d,so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n", loop, subm->subobs, slot_state[loop], subm->msec_wait,
+           subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->rf_seen);
   }
 
   printf("\n");  // Blank line
