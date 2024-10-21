@@ -2017,7 +2017,7 @@ void *makesub() {
         }
       } else if ((sub[loop].state == 2 && sub[loop].meta_done == 5) ||  // failed to read metadata
                  (sub[loop].state == 4 || sub[loop].state == 5) ||      // finished attempting makesub
-                 (sub[loop].state == 6 && sub[loop].meta_done > 4)      // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
+                 (sub[loop].state == 6 && sub[loop].meta_done >= 4)     // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
       ) {
         report_substatus("makesub", "subobs %d slot %d. Clearing slot, as we've finished with it", sub[loop].subobs, loop);
         clear_slot(&sub[loop]);
