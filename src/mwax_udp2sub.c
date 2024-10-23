@@ -235,6 +235,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include <netinet/ip.h>
 #include <sys/socket.h>
@@ -551,8 +552,8 @@ struct iovec *iovecs;
 mwa_udp_packet_t *UDPbuf;
 udp2sub_monitor_t monitor;
 
-volatile int slot_state[4] = {0};  // 0: free, 1: collecting packets, 2: ready to write, 3: write in progress, 4/5: write succeeded/failed, 6: marked for abandonment
-volatile int meta_state[4] = {0};  // 0: free, 1: metafits read requested, 2: metafits read in progress, 4/5: metafits read succeeded/failed
+atomic_int slot_state[4] = {0};  // 0: free, 1: collecting packets, 2: ready to write, 3: write in progress, 4/5: write succeeded/failed, 6: marked for abandonment
+atomic_int meta_state[4] = {0};  // 0: free, 1: metafits read requested, 2: metafits read in progress, 4/5: metafits read succeeded/failed
 
 subobs_udp_meta_t *sub;  // Pointer to the four subobs metadata arrays
 char *blank_sub_line;    // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
