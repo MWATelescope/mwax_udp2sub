@@ -552,7 +552,7 @@ mwa_udp_packet_t *UDPbuf;
 udp2sub_monitor_t monitor;
 
 volatile int slot_state[4] = {0};  // 0: free, 1: collecting packets, 2: ready to write, 3: write in progress, 4/5: write succeeded/failed, 6: marked for abandonment
-volatile int meta_state[4] = {0};  // 0: free, 2: metafits read in progress, 4/5: metafits read succeeded/failed
+volatile int meta_state[4] = {0};  // 0: free, 1: metafits read requested, 2: metafits read in progress, 4/5: metafits read succeeded/failed
 
 subobs_udp_meta_t *sub;  // Pointer to the four subobs metadata arrays
 char *blank_sub_line;    // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
@@ -1161,7 +1161,8 @@ void *UDP_parse() {
           sub[slot_index].subobs    = my_udp->GPS_time;       // We've already cleared the low three bits.
           sub[slot_index].first_udp = UDP_removed_from_buff;  // This was the first udp packet seen for this sub. (0 based)
           slot_state[slot_index]    = 1;                      // Let's remember we're using this slot now and tell other threads.
-          // NB: The subobs field is assumed to have been populated *before* this becomes 1
+          meta_state[slot_index]    = 1;                      // request metafits read
+          // NB: The subobs field must be populated *before* these become 1
         }
 
         //---------- This packet isn't similar enough to previous ones (ie from the same sub-obs) to assume things, so let's get new pointers
@@ -1708,17 +1709,14 @@ void add_meta_fits() {
 
     for (loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
 
-      if ((slot_state[loop] == 1 || slot_state[loop] == 2) &&  //(state should never reach 2 while meta_done is 0, but just in case..
-          (meta_state[loop] == 0)) {                           // If this sub is ready to have M&C metadata added
-
+      if ((slot_state[loop] == 6) && (meta_state[loop] < 2)) {   // If we are in the process of abandoning this slot, but haven't started reading metadata yet
+        meta_state[loop] = 6;                                    // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
+      } else if (meta_state[loop] == 1) {                        // If this sub is ready to have M&C metadata added
         if (slot_index == -1) {                                  // check if we've already found a different one to do and if we haven't
           slot_index = loop;                                     // then mark this one as the best so far
         } else if (sub[slot_index].subobs > sub[loop].subobs) {  // if that other one was for a later sub than this one
           slot_index = loop;                                     // then mark this one as the most urgent
         }
-      }
-      if ((slot_state[loop] == 6) && (meta_state[loop] == 0)) {  // If we are in the process of abandoning this slot, but haven't started reading metadata yet
-        meta_state[loop] = 6;                                    // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
       }
     }  // We left this loop with an index to the best sub to do or a -1 if none available.
 
@@ -2017,7 +2015,7 @@ void *makesub() {
       ) {
         report_substatus("makesub", "subobs %d slot %d. Clearing slot, as we've finished with it", sub[loop].subobs, loop);
         clear_slot(&sub[loop]);
-        meta_state[loop] = 0;  // TODO - add meta_state 1 so this doesn't become an implicit request before the slot is ready (eg if slot_state was 2 before the clear)
+        meta_state[loop] = 0;
         slot_state[loop] = 0;
       }
     }  // We left this loop with an index to the best sub to write or a -1 if none available.
@@ -2510,7 +2508,7 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   subobs_udp_meta_t *subm = &sub[0];
   uint32_t subobs_start   = obs_id + subobs_idx * 8;
   slot_state[0]           = 1;
-  meta_state[0]           = 0;
+  meta_state[0]           = 1;
   sub[0].subobs           = subobs_start & ~7;
 
   fprintf(stderr, "obs ID: %d\n", obs_id);

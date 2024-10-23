@@ -20,7 +20,7 @@ The first time a packet arrives for a new slot, the slot is marked as being for 
 
 
 ```
-0._ -> 1._         # mark as receiving packets
+0.0 -> 1.1         # mark as receiving packets, and request metafits read
 1._ -> 2._         # request subfile write. This is the transition for recent packets
 1._ -> 6._         # abandon.
 ```
@@ -33,9 +33,9 @@ to read the metafile, then sets `meta_done` to 4 or 5 depending on whether the
 metadata acquisition was successful.
 
 ```
-[12].0 -> _.2      # enter metafits reading state (but after this we check state has not become 6 before continuing)
-6.0 -> _.6         # let makesub know it's safe to free the slot.
-_.2 -> _.[45]      # exit metafits reading state
+6.[01] -> _.6   # let makesub know it's safe to free the slot.
+[^6].1 -> _.2   # enter metafits reading state
+_.2 -> _.[45]   # exit metafits reading state
 ```
 
 ### makesub()
