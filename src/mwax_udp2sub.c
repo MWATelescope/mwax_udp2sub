@@ -1191,15 +1191,14 @@ void *UDP_parse() {
         }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
 
         this_sub->udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
-        // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.  The dimensions are rf_input (sorted by the order in
-        // which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs. By this stage, seconds and subsecs have been merged into a single
-        // number so subsec time is already in the range 0 to 5001
+        // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.
+        // The dimensions are rf_input (sorted by the order in which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs.
+        // By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
 
-        this_sub->last_udp =
-            UDP_removed_from_buff;  // This was the last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain there
-        this_sub
-            ->udp_count++;  // Add one to the number of udp packets seen this sub obs.  NB Includes duplicates and faked delay packets so can't reliably be used to check if we're
-        // finished a sub
+        this_sub->last_udp = UDP_removed_from_buff;  // The last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain
+        this_sub->udp_count++;                       // Add one to the number of udp packets seen this sub obs.
+                                                     // We rarely get all ninputs*5000 packets for a given sub obs, so even if
+                                                     // we didn't count duplicates we still couldn't use this to check if we've finished a sub.
         monitor.udp_count++;
       }
 
