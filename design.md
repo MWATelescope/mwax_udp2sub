@@ -56,9 +56,9 @@ the slot is cleared once writing is complete, or if the slot needs abandoning
 6.[456] -> 0.0    # free the slot (abandonment requested)
 ```
 
-## standard compatibility
+## Standard compatibility
 
-I'm planning on moving the state variables to C atomics, which requires at least C11.
+The state variables now use C atomics, which require at least C11.
 The only difference between C11 and C17 in that regard is the deprecation of ATOMIC_VAR_INIT,
 so we specify C17 to ensure we don't use that.
 (C17 was generally speaking a bugfix release anyway)

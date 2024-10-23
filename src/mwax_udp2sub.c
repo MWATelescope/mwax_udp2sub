@@ -6,8 +6,11 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 91
-#define THISVER "2.13.1"
+#define BUILD 92
+#define THISVER "2.14"
+//
+// 2.14-092     2024-10-23 CJP  major overhaul of buffer state transitions alongside additional logging to catch/repair issues
+//                              with udp2sub locking up after moderate packet loss incidents, and state system documentation.
 //
 // 2.13-091     2024-09-04 CJP  navigate metafits HDUs by name not index, separate out metafits parsing to dedicated function,
 //                              and add more error checks and logging.  Add and apply standard clang-format settings.  First
