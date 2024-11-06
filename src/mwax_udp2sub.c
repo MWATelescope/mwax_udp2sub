@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 92
-#define THISVER "2.14"
+#define THISVER "2.14a"
 //
 // 2.14-092     2024-10-23 CJP  major overhaul of buffer state transitions alongside additional logging to catch/repair issues
 //                              with udp2sub locking up after moderate packet loss incidents, and state system documentation.
@@ -1040,6 +1040,7 @@ void *UDP_parse() {
 
   //---------------- Main loop to process incoming udp packets -------------------
 
+  mwa_udp_packet_t *last_translated = NULL;
   while (!terminate) {
     if (UDP_removed_from_buff < UDP_added_to_buff) {            // If there is at least one packet waiting to be processed
       mwa_udp_packet_t *my_udp;                                 // Make a local pointer to the UDP packet we're working on
@@ -1053,7 +1054,8 @@ void *UDP_parse() {
         my_udp->GPS_time      = ntohl(my_udp->GPS_time);     // Convert GPS_time (bottom 32 bits only) to a usable uint32_t
         my_udp->rf_input      = ntohs(my_udp->rf_input);     // Convert rf_input to a usable uint16_t
         my_udp->edt2udp_token = ntohs(my_udp->edt2udp_token);  // Convert edt2udp_token to a usable uint16_t
-                                                               // the bottom three bits of the GPS_time is 'which second within the subobservation' this second is
+        last_translated       = my_udp;
+        // the bottom three bits of the GPS_time is 'which second within the subobservation' this second is
         my_udp->subsec_time += ((my_udp->GPS_time & 0b111) * SUBSECSPERSEC) + 1;  // Change the subsec field to be the packet count within a whole subobs, not just this second. was
                                                                                   // 0 to 624.  now 1 to 5000 inclusive. (0x21 packets can be 0 to 5001!)
 
@@ -1072,8 +1074,16 @@ void *UDP_parse() {
           (my_udp->GPS_time < now - 32) ||  // packet almost certainly has a bad timestamp
           (my_udp->GPS_time > now + 9)      // Note that this validly be for the near future if we're writing a margin packet into next subobs
       ) {                                   // This packet is not a valid packet for us.
-        report_substatus("UDP_parse", "rejecting packet (packet_type=0x02x, subobs=%d, rf_input=%d, now=%d, edt2udp_token=%d", my_udp->packet_type, my_udp->GPS_time,
-                         my_udp->rf_input, now, my_udp->edt2udp_token);
+
+        if (my_udp != last_translated) {                         // we haven't translated to network order. Do this before we log the contents.
+          my_udp->subsec_time   = ntohs(my_udp->subsec_time);    // Convert subsec_time to a usable uint16_t which at this stage is still within a single second
+          my_udp->GPS_time      = ntohl(my_udp->GPS_time);       // Convert GPS_time (bottom 32 bits only) to a usable uint32_t
+          my_udp->rf_input      = ntohs(my_udp->rf_input);       // Convert rf_input to a usable uint16_t
+          my_udp->edt2udp_token = ntohs(my_udp->edt2udp_token);  // Convert edt2udp_token to a usable uint16_t
+        }
+
+        report_substatus("UDP_parse", "rejecting packet (packet_type=0x%02x, GPS_time=%d, (now=%d), rf_input=%d, edt2udp_token=0x%04x",  //
+                         my_udp->packet_type, my_udp->GPS_time, now, my_udp->rf_input, my_udp->edt2udp_token);
         UDP_removed_from_buff++;  // Flag it as used and release the buffer slot.  We don't want to see it again.
         continue;                 // start the loop again
       }
