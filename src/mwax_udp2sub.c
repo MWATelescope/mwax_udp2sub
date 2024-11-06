@@ -216,21 +216,6 @@
 // 1.00a-001    2017-05-25 BWC  The Beginning!
 //
 //===================================================================================================================================================
-//
-// To compile:  gcc mwax_udp2sub_xx.c -omwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
-//      or      gcc mwax_udp2sub_xx.c -o../mwax_u2s -lpthread -Ofast -march=native -lrt -lcfitsio -Wall
-//              There should be NO warnings or errors on compile!
-//
-// To run:      numactl --cpunodebind=1 --membind=1 dd bs=4096 count=1288001 if=/dev/zero of=/dev/shm/mwax/a.free
-//              numactl --cpunodebind=1 --membind=1 ./mwax_u2s
-//
-// To run:      From Helios type:
-//                      for i in {01..06};do echo mwax$i;ssh mwax$i 'cd /data/solarplatinum;numactl --cpunodebind=0 --membind=0 ./udp2sub -c 23 > output.log &';done
-//                      for i in {01..06};do echo mwax$i;ssh mwax$i 'cat /data/solarplatinum/20190405.log';done
-//
-//===================================================================================================================================================
-//
-// To do:               Too much to say!
 
 #define _GNU_SOURCE
 
@@ -240,7 +225,6 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 
-#include <netinet/ip.h>
 #include <sys/socket.h>
 
 #include <time.h>
@@ -251,7 +235,6 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <float.h>
@@ -264,23 +247,6 @@
 #include <stdarg.h>
 
 #include "vec3.h"
-
-//---------------- Define our old friends -------------------
-
-#define FALSE 0
-// #define TRUE !(FALSE)
-
-#define BOOL int
-#define INT8 signed char
-#define UINT8 unsigned char
-#define INT16 short
-#define UINT16 unsigned short
-#define INT32 int
-#define UINT32 unsigned int
-#define INT64 long long int
-#define UINT64 unsigned long long int
-
-#define ERR_MSG_LEN 256
 
 //---------------- and some new friends -------------------
 
@@ -341,7 +307,7 @@
 
 //---------------- MWA external Structure definitions --------------------
 
-#pragma pack(push, 1)  // We're writing this header into all our packets, so we want/need to force the compiler not to add it's own idea of structure padding
+#pragma pack(push, 1)  // We're writing this header into all our packets, so we want/need to force the compiler not to add its own idea of structure padding
 
 typedef struct mwa_udp_packet {  // Structure format for the MWA data packets
 
@@ -388,7 +354,7 @@ typedef struct udp2sub_monitor {   // Health packet data
 
 typedef struct altaz_meta {  // Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
 
-  INT64 gpstime;
+  int64_t gpstime;
   float Alt;
   float Az;
   float Dist_km;
@@ -479,10 +445,10 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int msec_wait;  // The number of milliseconds the sub write thread had waited doing nothing before starting to write out this sub.  Only valid for state = 3 or 4 or 5 or higher
   int msec_took;  // The number of milliseconds the sub write thread took to write out this sub.  Only valid for state = 4 or 5 or higher
 
-  INT64 first_udp;
-  INT64 last_udp;
-  INT64 udp_at_start_write;
-  INT64 udp_at_end_write;
+  int64_t first_udp;
+  int64_t last_udp;
+  int64_t udp_at_start_write;
+  int64_t udp_at_end_write;
 
   int udp_count;  // The number of udp packets collected from the NIC
   int udp_dummy;  // The number of dummy packets we needed to insert to pad things out
@@ -490,7 +456,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int meta_msec_wait;  // The number of milliseconds it took to from reading the last metafits to finding a new one
   int meta_msec_took;  // The number of milliseconds it took to read the metafits
 
-  INT64 GPSTIME;  // Following fields are straight from the metafits file (via the metabin) This is the GPSTIME *FOR THE OBS* not the subobs!!!
+  int64_t GPSTIME;  // Following fields are straight from the metafits file (via the metabin) This is the GPSTIME *FOR THE OBS* not the subobs!!!
   int EXPOSURE;
   char FILENAME[300];
   int CABLEDEL;
@@ -505,7 +471,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   float INTTIME;
 
   int NINPUTS;
-  INT64 UNIXTIME;
+  int64_t UNIXTIME;
 
   int COARSE_CHAN;
   int FINECHAN_hz;
@@ -541,14 +507,14 @@ typedef struct data_section {
 // These variables are shared by all threads.  "file scope"
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 
-volatile BOOL terminate         = FALSE;  // Global request for everyone to close down
-volatile BOOL UDP_recv_complete = FALSE;  // UDP_recv has closed down successfully.
+volatile bool terminate         = false;  // Global request for everyone to close down
+volatile bool UDP_recv_complete = false;  // UDP_recv has closed down successfully.
 
-volatile INT64 UDP_added_to_buff     = 0;  // Total number of packets received and placed in the buffer.  If it overflows we are in trouble and need a restart.
-volatile INT64 UDP_removed_from_buff = 0;  // Total number of packets pulled from buffer and space freed up.  If it overflows we are in trouble and need a restart.
+volatile int64_t UDP_added_to_buff     = 0;  // Total number of packets received and placed in the buffer.  If it overflows we are in trouble and need a restart.
+volatile int64_t UDP_removed_from_buff = 0;  // Total number of packets pulled from buffer and space freed up.  If it overflows we are in trouble and need a restart.
 
-INT64 UDP_num_slots;            // Must be at least 3000000 for mwax07 with 128T. 3000000 will barely make it!
-UINT32 GPS_offset = 315964782;  // Logging only.  Needs to be updated on leap seconds
+int64_t UDP_num_slots;            // Must be at least 3000000 for mwax07 with 128T. 3000000 will barely make it!
+uint32_t GPS_offset = 315964782;  // Logging only.  Needs to be updated on leap seconds
 
 struct mmsghdr *msgvecs;
 struct iovec *iovecs;
@@ -562,9 +528,9 @@ subobs_udp_meta_t *sub;  // Pointer to the four subobs metadata arrays
 char *blank_sub_line;    // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
 char *sub_header;        // Pointer to a buffer that's the size of a sub file header.
 
-BOOL debug_mode         = FALSE;  // Default to not being in debug mode
-BOOL force_cable_delays = FALSE;  // Always apply cable delays, regardless of metafits
-BOOL force_geo_delays   = FALSE;  // Always apply geometric delays, regardless of metafits
+bool debug_mode         = false;  // Default to not being in debug mode
+bool force_cable_delays = false;  // Always apply cable delays, regardless of metafits
+bool force_geo_delays   = false;  // Always apply geometric delays, regardless of metafits
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // read_config - use our hostname and a command line parameter to find ourselves in the list of possible configurations
@@ -581,7 +547,7 @@ typedef struct udp2sub_config {  // Structure for the configuration of each udp2
   char hostname[64];  // Host name is looked up against these strings to select the correct line of configuration settings
   int host_instance;  // Is compared with a value that can be put on the command line for multiple copies per server
 
-  INT64 UDP_num_slots;  // The number of UDP buffers to assign.  Must be ~>=3000000 for 128T array
+  int64_t UDP_num_slots;  // The number of UDP buffers to assign.  Must be ~>=3000000 for 128T array
 
   unsigned int cpu_mask_parent;     // Allowed cpus for the parent thread which reads metafits file
   unsigned int cpu_mask_UDP_recv;   // Allowed cpus for the thread that needs to pull data out of the NIC super fast
@@ -633,7 +599,7 @@ void report_substatus(char *thread_name, char *status, ...) {
   if (isround(repeat_count)) {
     struct timespec this_time;
     clock_gettime(CLOCK_REALTIME, &this_time);
-    printf("now=%lld.%03d %-15s: ", (INT64)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec / 1000000), thread_name);
+    printf("now=%ld.%03d %-15s: ", (int64_t)(this_time.tv_sec - GPS_offset), (int)(this_time.tv_nsec / 1000000), thread_name);
     printf("(slot.meta)_state = [%d.%d %d.%d %d.%d %d.%d] ", slot_state[0], meta_state[0], slot_state[1], meta_state[1], slot_state[2], meta_state[2], slot_state[3],
            meta_state[3]);
     va_list arguments;
@@ -906,12 +872,12 @@ void *UDP_recv() {
 
   //---------------- Initialize and declare variables ------------------------
 
-  INT64 UDP_slots_empty;  // How much room is left unused in the application's UDP receive buffer
-  INT64 UDP_first_empty;  // Index to the first empty slot 0 to (UDP_num_slots-1)
+  int64_t UDP_slots_empty;  // How much room is left unused in the application's UDP receive buffer
+  int64_t UDP_first_empty;  // Index to the first empty slot 0 to (UDP_num_slots-1)
 
-  INT64 UDP_slots_empty_min = UDP_num_slots + 1;  // what's the smallest number of empty slots we've seen this batch?  (Set an initial value that will always be beaten)
+  int64_t UDP_slots_empty_min = UDP_num_slots + 1;  // what's the smallest number of empty slots we've seen this batch?  (Set an initial value that will always be beaten)
 
-  INT64 Num_loops_when_full = 0;  // How many times (since program start) have we checked if there was room in the buffer and there wasn't any left  :-(
+  int64_t Num_loops_when_full = 0;  // How many times (since program start) have we checked if there was room in the buffer and there wasn't any left  :-(
 
   int retval;  // General return value variable.  Context dependant.
 
@@ -928,7 +894,7 @@ void *UDP_recv() {
 
   if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {  // create what looks like an ordinary UDP socket
     perror("socket");
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -939,14 +905,14 @@ void *UDP_recv() {
   if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) == -1) {
     perror("setsockopt SO_REUSEADDR");
     close(fd);
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {  // bind to the receive address
     perror("bind");
     close(fd);
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -956,7 +922,7 @@ void *UDP_recv() {
   if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == -1) {
     perror("setsockopt IP_ADD_MEMBERSHIP");
     close(fd);
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -1007,7 +973,7 @@ void *UDP_recv() {
   }
 
   //  sleep(1);
-  printf("looped on full %lld times.  min = %lld\n", Num_loops_when_full, UDP_slots_empty_min);
+  printf("looped on full %ld times.  min = %ld\n", Num_loops_when_full, UDP_slots_empty_min);
   fflush(stdout);
 
   mreq.imr_multiaddr.s_addr = inet_addr(conf.multicast_ip);
@@ -1023,7 +989,7 @@ void *UDP_recv() {
 
   printf("Exiting UDP_recv\n");
   fflush(stdout);
-  UDP_recv_complete = TRUE;
+  UDP_recv_complete = true;
   pthread_exit(NULL);
 }
 
@@ -1284,8 +1250,8 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   fits_read_key_verbose(fptr, TSTRING, "PROJECT", "project id", &(subm->PROJECT), NULL, &status);  // project id
   fits_read_key_verbose(fptr, TSTRING, "MODE", NULL, &(subm->MODE), NULL, &status);                // observing mode
 
-  if ((subm->GPSTIME + (INT64)subm->EXPOSURE - 1) < (INT64)subm->subobs) {  // If the last observation has expired. (-1 because inclusive)
-    strcpy(subm->MODE, "NO_CAPTURE");                                       // then change the mode to NO_CAPTURE
+  if ((subm->GPSTIME + (int64_t)subm->EXPOSURE - 1) < (int64_t)subm->subobs) {  // If the last observation has expired. (-1 because inclusive)
+    strcpy(subm->MODE, "NO_CAPTURE");                                           // then change the mode to NO_CAPTURE
   }
 
   //---------- Parsing the sky frequency (coarse) channel is a whole job in itself! ----------
@@ -1370,7 +1336,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   long frow, felem;
 
   int cfitsio_ints[MAX_INPUTS];      // Temp storage for integers read from the metafits file (in metafits order) before copying to final structure (in sub file order)
-  INT64 cfitsio_J[3];                // Temp storage for long "J" type integers read from the metafits file (used in pointing HDU)
+  int64_t cfitsio_J[3];              // Temp storage for long "J" type integers read from the metafits file (used in pointing HDU)
   float cfitsio_floats[MAX_INPUTS];  // Temp storage for floats read from the metafits file (in metafits order) before copying to final structure (in sub file order)
 
   char cfitsio_strings[MAX_INPUTS][15];  // Temp storage for strings read from the metafits file (in metafits order) before copying to final structure (in sub file order)
@@ -1671,12 +1637,12 @@ void add_meta_fits() {
 
   char metafits_file[300];  // The metafits file name
 
-  INT64 bcsf_obsid;  // 'best candidate so far' for the metafits file
-  INT64 mf_obsid;
+  int64_t bcsf_obsid;  // 'best candidate so far' for the metafits file
+  int64_t mf_obsid;
 
   int loop;
   int slot_index;  // slot to read metafits for.
-  BOOL go4meta;
+  bool go4meta;
 
   subobs_udp_meta_t *subm;  // pointer to the sub metadata array I'm working on
 
@@ -1750,12 +1716,12 @@ void add_meta_fits() {
 
       meta_state[slot_index] = 2;  // Record that we're working on this one!
 
-      go4meta = TRUE;  // All good so far
+      go4meta = true;  // All good so far
 
       //---------- Look in the metafits directory and find the most applicable metafits file ----------
 
       if (go4meta) {      // If everything is okay so far, enter the next block of code
-        go4meta = FALSE;  // but go back to assuming a failure unless we succeed in the next bit
+        go4meta = false;  // but go back to assuming a failure unless we succeed in the next bit
 
         bcsf_obsid = 0;  // 'best candidate so far' is very bad indeed (ie non-existent)
 
@@ -1764,7 +1730,7 @@ void add_meta_fits() {
         if (dir == NULL) {  // If the directory doesn't exist we must be running on an incorrectly set up server
           printf("Fatal error: Directory %s does not exist\n", conf.metafits_dir);
           fflush(stdout);
-          terminate = TRUE;    // Tell every thread to close down
+          terminate = true;    // Tell every thread to close down
           pthread_exit(NULL);  // and close down ourselves.
         }
 
@@ -1777,7 +1743,7 @@ void add_meta_fits() {
               if (mf_obsid <= subm->subobs) {        // if the obsid is less than or the same as our subobs id, then it's a candidate for the one we need
                 if (mf_obsid > bcsf_obsid) {         // If this metafits is later than the 'best candidate so far'?
                   bcsf_obsid = mf_obsid;             // that would make it our new best candidate so far
-                  go4meta    = TRUE;                 // We've found at least one file worth looking at.
+                  go4meta    = true;                 // We've found at least one file worth looking at.
                 }
               }
             }
@@ -1788,8 +1754,8 @@ void add_meta_fits() {
 
       //---------- Open the 'best candidate so far' metafits file ----------
 
-      if (go4meta) {                                                                     // If everything is okay so far, enter the next block of code
-        sprintf(metafits_file, "%s/%lld_metafits.fits", conf.metafits_dir, bcsf_obsid);  // Construct the full file name including path
+      if (go4meta) {                                                                    // If everything is okay so far, enter the next block of code
+        sprintf(metafits_file, "%s/%ld_metafits.fits", conf.metafits_dir, bcsf_obsid);  // Construct the full file name including path
         go4meta = read_metafits(metafits_file, subm);
         report_substatus("add_meta_fits", "attempt to read %s %s.", metafits_file, go4meta ? "succeeded" : "failed");
       }  // End of 'go for meta' metafile reading
@@ -1959,7 +1925,7 @@ void *makesub() {
   int slot_index;  // index of slot to write out
   int left_this_line;
   int sub_result;  // Temp storage for the result before we write it back to the array for others to see.  Once we do that, we can't change our mind.
-  BOOL go4sub;
+  bool go4sub;
 
   mwa_udp_packet_t dummy_udp = {0};                  // Make a dummy udp packet full of zeros and NULLs.  We'll use this to stand in for every missing packet!
   void *dummy_volt_ptr       = &dummy_udp.volts[0];  // and we'll remember where we can find UDP_PAYLOAD_SIZE (4096LL) worth of zeros
@@ -2047,7 +2013,7 @@ void *makesub() {
 
       //---------- Do some last-minute metafits work to prepare ----------
 
-      go4sub = TRUE;  // Say it all looks okay so far
+      go4sub = true;  // Say it all looks okay so far
 
       ninputs_pad  = subm->NINPUTS;                    // We don't pad .sub files any more so these two variables are the same
       ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);  // Get this from 'ninputs' rounded up to multiples of 32
@@ -2066,24 +2032,24 @@ void *makesub() {
       }
 
       if (debug_mode) {  // If we're in debug mode
-        sprintf(dest_file, "%s/%lld_%d_%d.free", conf.shared_mem_dir, subm->GPSTIME, subm->subobs,
+        sprintf(dest_file, "%s/%ld_%d_%d.free", conf.shared_mem_dir, subm->GPSTIME, subm->subobs,
                 subm->COARSE_CHAN);  // Construct the full file name including path for a .free file
       } else {
-        sprintf(dest_file, "%s/%lld_%d_%d.sub", conf.shared_mem_dir, subm->GPSTIME, subm->subobs,
+        sprintf(dest_file, "%s/%ld_%d_%d.sub", conf.shared_mem_dir, subm->GPSTIME, subm->subobs,
                 subm->COARSE_CHAN);  // Construct the full file name including path for a .sub (regular) file
       }
 
       //---------- Look in the shared memory directory and find the oldest .free file of the correct size ----------
 
       if (go4sub) {      // If everything is okay so far, enter the next block of code
-        go4sub = FALSE;  // but go back to assuming a failure unless we succeed in the next bit
+        go4sub = false;  // but go back to assuming a failure unless we succeed in the next bit
 
         dir = opendir(conf.shared_mem_dir);  // Open up the shared memory directory
 
         if (dir == NULL) {  // If the directory doesn't exist we must be running on an incorrectly set up server
           printf("Fatal error: Directory %s does not exist\n", conf.shared_mem_dir);
           fflush(stdout);
-          terminate = TRUE;    // Tell every thread to close down
+          terminate = true;    // Tell every thread to close down
           pthread_exit(NULL);  // and close down ourselves.
         }
 
@@ -2109,7 +2075,7 @@ void *makesub() {
                   if (filestats.st_ctim.tv_sec < earliest_file) {  // and this file has been there longer than the longest one we've found so far (ctime)
                     earliest_file = filestats.st_ctim.tv_sec;      // We have a new 'oldest' time to beat
                     strcpy(best_file, this_file);                  // and we'll store its name
-                    go4sub = TRUE;                                 // We've found at least one file we can reuse.  It may not be the best, but we know we can do this now.
+                    go4sub = true;                                 // We've found at least one file we can reuse.  It may not be the best, but we know we can do this now.
                   }
                 } else {
                   bad_free_files++;  // That's one more we can use!
@@ -2128,7 +2094,7 @@ void *makesub() {
       //---------- Try to mmap that file (assuming we found one) so we can treat it like RAM (which it actually is) ----------
 
       if (go4sub) {      // If everything is okay so far, enter the next block of code
-        go4sub = FALSE;  // but go back to assuming a failure unless we succeed in the next bit
+        go4sub = false;  // but go back to assuming a failure unless we succeed in the next bit
 
         // printf( "The winner is %s\n", best_file );
 
@@ -2137,7 +2103,7 @@ void *makesub() {
           if ((ext_shm_fd = shm_open(&conf.temp_file_name[8], O_RDWR, 0666)) != -1) {  // Try to open the shmem file (after removing "/dev/shm" ) and if it opens successfully
 
             if ((ext_shm_buf = (char *)mmap(NULL, desired_size, PROT_READ | PROT_WRITE, MAP_SHARED, ext_shm_fd, 0)) != ((char *)(-1))) {  // and if we can mmap it successfully
-              go4sub = TRUE;  // Then we are all ready to use the buffer so remember that
+              go4sub = true;  // Then we are all ready to use the buffer so remember that
             } else {
               printf("mmap failed\n");
               fflush(stdout);
@@ -2341,7 +2307,7 @@ void *makesub() {
       slot_state[slot_index] = sub_result;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
       report_substatus("makesub", "subobs %d slot %d. Finished writing.", sub[slot_index].subobs, slot_index);
-      printf("now=%lld,so=%d,ob=%lld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%lld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n", (INT64)(ended_sub_write_time.tv_sec - GPS_offset),
+      printf("now=%ld,so=%d,ob=%ld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%ld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n", (int64_t)(ended_sub_write_time.tv_sec - GPS_offset),
              subm->subobs, subm->GPSTIME, subm->MODE, slot_state[slot_index], free_files, bad_free_files, subm->msec_wait, subm->msec_took,
              subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs);
 
@@ -2355,7 +2321,7 @@ void *makesub() {
 }
 
 void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, int ninputs_xgpu, const data_section *data_sections, int n_data_sections) {
-  INT64 obs_offset = subm->subobs - subm->GPSTIME;  // How long since the observation started?
+  int64_t obs_offset = subm->subobs - subm->GPSTIME;  // How long since the observation started?
   char utc_start[30];
   time_t observation_start = subm->UNIXTIME;
   strftime(utc_start, sizeof(utc_start), "%Y-%m-%d-%H:%M:%S", gmtime(&observation_start));
@@ -2366,11 +2332,11 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   char *ep = sub_header + SUBFILE_HEADER_SIZE;
   bp += snprintf(bp, ep - bp, "HDR_SIZE %lld\n", SUBFILE_HEADER_SIZE);
   bp += snprintf(bp, ep - bp, "POPULATED 1\n");
-  bp += snprintf(bp, ep - bp, "OBS_ID %lld\n", subm->GPSTIME);
+  bp += snprintf(bp, ep - bp, "OBS_ID %ld\n", subm->GPSTIME);
   bp += snprintf(bp, ep - bp, "SUBOBS_ID %d\n", subm->subobs);
   bp += snprintf(bp, ep - bp, "MODE %s\n", subm->MODE);
   bp += snprintf(bp, ep - bp, "UTC_START %s\n", utc_start);
-  bp += snprintf(bp, ep - bp, "OBS_OFFSET %lld\n", obs_offset);
+  bp += snprintf(bp, ep - bp, "OBS_OFFSET %ld\n", obs_offset);
   bp += snprintf(bp, ep - bp, "NBIT 8\n");
   bp += snprintf(bp, ep - bp, "NPOL 2\n");
   bp += snprintf(bp, ep - bp, "NTIMESAMPLES %lld\n", NTIMESAMPLES);
@@ -2389,7 +2355,7 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "COARSE_CHANNEL %d\n", subm->COARSE_CHAN);
   bp += snprintf(bp, ep - bp, "CORR_COARSE_CHANNEL %d\n", conf.coarse_chan);
   bp += snprintf(bp, ep - bp, "SECS_PER_SUBOBS 8\n");
-  bp += snprintf(bp, ep - bp, "UNIXTIME %lld\n", subm->UNIXTIME);
+  bp += snprintf(bp, ep - bp, "UNIXTIME %ld\n", subm->UNIXTIME);
   bp += snprintf(bp, ep - bp, "UNIXTIME_MSEC 0\n");
   bp += snprintf(bp, ep - bp, "FINE_CHAN_WIDTH_HZ %d\n", subm->FINECHAN_hz);
   bp += snprintf(bp, ep - bp, "NFINE_CHAN %lld\n", (COARSECHAN_BANDWIDTH / subm->FINECHAN_hz));
@@ -2413,7 +2379,7 @@ void *heartbeat() {
   // create what looks like an ordinary UDP socket
   if ((monitor_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
     perror("socket");
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -2430,7 +2396,7 @@ void *heartbeat() {
   if (setsockopt(monitor_socket, IPPROTO_IP, IP_MULTICAST_LOOP, (char *)&loopch, sizeof(loopch)) < 0) {
     perror("setting IP_MULTICAST_LOOP:");
     close(monitor_socket);
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -2440,7 +2406,7 @@ void *heartbeat() {
   if (setsockopt(monitor_socket, IPPROTO_IP, IP_MULTICAST_IF, (char *)&localInterface, sizeof(localInterface)) < 0) {
     perror("setting local interface");
     close(monitor_socket);
-    terminate = TRUE;
+    terminate = true;
     pthread_exit(NULL);
   }
 
@@ -2463,7 +2429,7 @@ void *heartbeat() {
 void sigint_handler(int signo) {
   printf("\n\nAsked to shut down via SIGINT\n");
   fflush(stdout);
-  terminate = TRUE;  // This is a volatile, file scope variable.  All threads should be watching for this.
+  terminate = true;  // This is a volatile, file scope variable.  All threads should be watching for this.
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2471,7 +2437,7 @@ void sigint_handler(int signo) {
 void sigterm_handler(int signo) {
   printf("\n\nAsked to shut down via SIGTERM\n");
   fflush(stdout);
-  terminate = TRUE;  // This is a volatile, file scope variable.  All threads should be watching for this.
+  terminate = true;  // This is a volatile, file scope variable.  All threads should be watching for this.
 }
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2519,8 +2485,7 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
 
   struct timespec time_start;
   struct timespec time_now;
-  BOOL reader_done = FALSE;
-  // BOOL reader_success = FALSE;
+  bool reader_done = false;
   clock_gettime(CLOCK_REALTIME, &time_start);
   clock_gettime(CLOCK_REALTIME, &time_now);
   pthread_t reader_thread;
@@ -2529,15 +2494,13 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
     clock_gettime(CLOCK_REALTIME, &time_now);
     if (meta_state[0] == 4) {
       fprintf(stderr, "metadata loaded successfully.\n");
-      reader_done = TRUE;
-      // reader_success = TRUE;
+      reader_done = true;
     } else if (meta_state[0] == 5) {
       fprintf(stderr, "error loading metadata.\n");
-      reader_done = TRUE;
-      // reader_success = FALSE;
+      reader_done = true;
     }
   }
-  terminate = TRUE;
+  terminate = true;
   pthread_join(reader_thread, NULL);
   fprintf(stderr, "reader thread joined.\n");
   if (!reader_done) {
@@ -2618,12 +2581,12 @@ int main(int argc, char **argv) {
 
   uint32_t delaygen_obs_id     = 0;  // Observation ID for delay generator
   uint32_t delaygen_subobs_idx = 0;  // The n-th subobservation
-  BOOL delaygen_enable         = FALSE;
+  bool delaygen_enable         = false;
 
   while (argc > 1 && argv[1][0] == '-') {
     switch (argv[1][1]) {
       case 'd':
-        debug_mode = TRUE;
+        debug_mode = true;
         printf("Debug mode on\n");
         fflush(stdout);
         break;
@@ -2657,19 +2620,19 @@ int main(int argc, char **argv) {
         break;
 
       case 'C':
-        force_cable_delays = TRUE;
+        force_cable_delays = true;
         fprintf(stderr, "Force enabled cable delays.\n");
         fflush(stderr);
         break;
 
       case 'G':
-        force_geo_delays = TRUE;
+        force_geo_delays = true;
         fprintf(stderr, "Force enabled geometric delays.\n");
         fflush(stderr);
         break;
 
       case 'g':
-        delaygen_enable = TRUE;
+        delaygen_enable = true;
         fprintf(stderr, "Delay generator mode enabled. u2s will quit after generating delay data.\n");
         fflush(stderr);
         break;
@@ -2736,7 +2699,7 @@ int main(int argc, char **argv) {
   UDP_num_slots = conf.UDP_num_slots;  // We moved this to a config variable, but most of the code still assumes the old name so make both names valid
 
   // In delay geneator mode, we don't really need to buffer any packets, but we'll let the structures be populated
-  if (delaygen_enable == TRUE) {
+  if (delaygen_enable == true) {
     UDP_num_slots = 10;
   }
 
@@ -2808,7 +2771,7 @@ int main(int argc, char **argv) {
   }
 
   // Enter delay generator if enabled, then quit
-  if (delaygen_enable == TRUE) {
+  if (delaygen_enable == true) {
     return delaygen(delaygen_obs_id, delaygen_subobs_idx);
   }
 
@@ -2875,15 +2838,15 @@ int main(int argc, char **argv) {
   for (int loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
     subm = &sub[loop];                            // Temporary pointer to our sub's metadata array
 
-    printf("slot=%d,so=%d,st=%d,wait=%d,took=%d,first=%lld,last=%lld,startw=%lld,endw=%lld,count=%d,seen=%d\n", loop, subm->subobs, slot_state[loop], subm->msec_wait,
-           subm->msec_took, subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->rf_seen);
+    printf("slot=%d,so=%d,st=%d,wait=%d,took=%d,first=%ld,last=%ld,startw=%ld,endw=%ld,count=%d,seen=%d\n", loop, subm->subobs, slot_state[loop], subm->msec_wait, subm->msec_took,
+           subm->first_udp, subm->last_udp, subm->udp_at_start_write, subm->udp_at_end_write, subm->udp_count, subm->rf_seen);
   }
 
   printf("\n");  // Blank line
 
   mwa_udp_packet_t *my_udp;  // Make a local pointer to the UDP packet we're going to be working on.
 
-  INT64 UDP_closelog = UDP_removed_from_buff - 20;  // Go back 20 udp packets
+  int64_t UDP_closelog = UDP_removed_from_buff - 20;  // Go back 20 udp packets
 
   if (debug_mode) {                              // If we're in debug mode
     UDP_closelog = UDP_removed_from_buff - 100;  // go back 100!
@@ -2893,7 +2856,7 @@ int main(int argc, char **argv) {
 
   while (UDP_closelog <= UDP_removed_from_buff) {
     my_udp = &UDPbuf[UDP_closelog % UDP_num_slots];
-    printf("num=%lld,slot=%d,freq=%d,rf=%d,time=%d:%d,e2u=%d:%d\n", UDP_closelog, ((my_udp->GPS_time >> 3) & 0b11), my_udp->freq_channel, my_udp->rf_input, my_udp->GPS_time,
+    printf("num=%ld,slot=%d,freq=%d,rf=%d,time=%d:%d,e2u=%d:%d\n", UDP_closelog, ((my_udp->GPS_time >> 3) & 0b11), my_udp->freq_channel, my_udp->rf_input, my_udp->GPS_time,
            my_udp->subsec_time, my_udp->edt2udp_id, my_udp->edt2udp_token);
 
     UDP_closelog++;
