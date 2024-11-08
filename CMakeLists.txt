@@ -13,6 +13,10 @@ add_executable(mwax_u2s
         src/mwax_udp2sub.c
 )
 
+add_executable(mwax_packet_check
+        src/packet_check.c
+)
+
 include_directories(src)
 
 target_link_libraries(mwax_u2s
