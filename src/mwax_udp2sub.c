@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 92
-#define THISVER "2.14a"
+#define THISVER "2.14b"
 //
 // 2.14-092     2024-10-23 CJP  major overhaul of buffer state transitions alongside additional logging to catch/repair issues
 //                              with udp2sub locking up after moderate packet loss incidents, and state system documentation.
@@ -477,10 +477,11 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int FINECHAN_hz;
   int INTTIME_msec;
 
-  uint16_t rf_seen;                  // The number of different rf_input sources seen so far this sub observation
-  uint16_t rf2ndx[65536];            // A mapping from the rf_input value to what row in the pointer array its pointers are stored
-  char **udp_volts[MAX_INPUTS + 1];  // array of arrays of pointers to every udp packet's payload that may be needed for this sub-observation.
-                                     // NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
+  uint16_t rf_seen;        // The number of different rf_input sources seen so far this sub observation
+  uint16_t rf2ndx[65536];  // A mapping from the rf_input value to what row in the pointer array its pointers are stored
+  char ***udp_volts;       // array of arrays of pointers to every udp packet's payload that may be needed for this sub-observation.
+                           // NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
+                           // also note, entry 0 should never be dereferenced.
 
   tile_meta_t rf_inp[MAX_INPUTS];  // Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file,
                                    // NOT the order udp packets were seen in.
@@ -993,19 +994,12 @@ void *UDP_recv() {
   pthread_exit(NULL);
 }
 
-void clear_slot(subobs_udp_meta_t *ts) {
-  static char **voltage_save[MAX_INPUTS + 1];
-  for (int i = 0; i < MAX_INPUTS + 1; i++) {
-    voltage_save[i] = ts->udp_volts[i];
-    memset(voltage_save[i], 0, UDP_PER_RF_PER_SUB * sizeof(char *));  // TODO - allocate a single buffer per slot so we can drop down to one memset call
-  }
+void clear_slot(int slot) {
+  memset(sub[slot].udp_volts[1], 0, MAX_INPUTS * UDP_PER_RF_PER_SUB * sizeof(char *));
 
-  // Among other things, like wiping the array of pointers back to NULL, this memset sets the value of 'state' back to 0.
-  memset(ts, 0, sizeof(subobs_udp_meta_t));
-
-  for (int i = 0; i < MAX_INPUTS + 1; i++) {
-    ts->udp_volts[i] = voltage_save[i];
-  }
+  char ***voltage_save = sub[slot].udp_volts;
+  memset(&sub[slot], 0, sizeof(subobs_udp_meta_t));
+  sub[slot].udp_volts = voltage_save;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1170,7 +1164,7 @@ void *UDP_parse() {
           rf_ndx                             = this_sub->rf_seen;  // and get the correct index for this packet too because we'll need that
         }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
 
-        this_sub->udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
+        sub[slot_index].udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
         // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.
         // The dimensions are rf_input (sorted by the order in which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs.
         // By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
@@ -1993,7 +1987,7 @@ void *makesub() {
                  (slot_state[loop] == 6 && meta_state[loop] >= 4)     // slot abandoned for taking too long; we wait for metafits read attempt completion before clearing.
       ) {
         report_substatus("makesub", "subobs %d slot %d. Clearing slot, as we've finished with it", sub[loop].subobs, loop);
-        clear_slot(&sub[loop]);
+        clear_slot(loop);
         meta_state[loop] = 0;
         slot_state[loop] = 0;
       }
@@ -2191,7 +2185,7 @@ void *makesub() {
         for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
           rfm            = &subm->rf_inp[MandC_rf];  // Tile metadata
           uint16_t row   = subm->rf2ndx[rfm->rf_input];
-          char **packets = subm->udp_volts[row];
+          char **packets = sub[slot_index].udp_volts[row];
           for (int t = 0; t < UDP_PER_RF_PER_SUB - 2; t += 8) {
             uint8_t bitmap = (packets[t + 1] != NULL) << 7 | (packets[t + 2] != NULL) << 6 | (packets[t + 3] != NULL) << 5 | (packets[t + 4] != NULL) << 4 |
                              (packets[t + 5] != NULL) << 3 | (packets[t + 6] != NULL) << 2 | (packets[t + 7] != NULL) << 1 | (packets[t + 8] != NULL);
@@ -2215,16 +2209,18 @@ void *makesub() {
         for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
           my_MandC = &my_MandC_meta[MandC_rf];
 
-          sp   = subm->udp_volts[my_MandC->seen_order][0];
+          char **packets = sub[slot_index].udp_volts[my_MandC->seen_order];
+
+          sp   = packets[0];
           dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-          sp   = subm->udp_volts[my_MandC->seen_order][1];
+          sp   = packets[1];
           dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-          sp   = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 2];
+          sp   = packets[UDP_PER_RF_PER_SUB - 2];
           dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
 
-          sp   = subm->udp_volts[my_MandC->seen_order][UDP_PER_RF_PER_SUB - 1];
+          sp   = packets[UDP_PER_RF_PER_SUB - 1];
           dest = mempcpy(dest, sp ? sp : dummy_volt_ptr, UDP_PAYLOAD_SIZE);
         }
 
@@ -2267,9 +2263,9 @@ void *makesub() {
               source_remain = UDP_PAYLOAD_SIZE - source_offset;  // How much of the packet is left in bytes?
                                                                  // It should be an even number and at least 2 or I have a bug in the logic or code
 
-              sp = subm->udp_volts[my_MandC->seen_order][source_packet];  // Pick up the pointer to the udp volt data we need (assuming we ever saw it arrive)
-              if (sp == NULL) {                                           // but if it never arrived
-                sp = dummy_volt_ptr;                                      // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
+              sp = sub[slot_index].udp_volts[my_MandC->seen_order][source_packet];  // Pick up the pointer to the udp volt data we need (assuming we ever saw it arrive)
+              if (sp == NULL) {                                                     // but if it never arrived
+                sp = dummy_volt_ptr;                                                // point to our pre-prepared, zero filled, fake packet we use when the real one isn't available
                 subm->udp_dummy++;  // The number of dummy packets we needed to insert to pad things out. Make a note for reporting and debug purposes
                 monitor.udp_dummy++;
               }
@@ -2757,12 +2753,22 @@ int main(int argc, char **argv) {
   }
 
   for (int slot = 0; slot < SUB_SLOTS; slot++) {
-    for (int input = 0; input < MAX_INPUTS + 1; input++) {
-      if (NULL == (sub[slot].udp_volts[input] = calloc(UDP_PER_RF_PER_SUB, sizeof(char *)))) {
-        printf("packet payload pointer array calloc failed\n");  // log a message
-        fflush(stdout);
-        exit(EXIT_FAILURE);  // and give up!
-      }
+    sub[slot].udp_volts = calloc(MAX_INPUTS + 1, sizeof(char **));
+    if (NULL == sub[slot].udp_volts) {
+      printf("packet payload pointer array calloc failed\n");  // log a message
+      fflush(stdout);
+      exit(EXIT_FAILURE);  // and give up!
+    }
+    char **cursor = calloc(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(char *));
+    if (NULL == cursor) {
+      printf("packet payload pointer array calloc failed\n");  // log a message
+      fflush(stdout);
+      exit(EXIT_FAILURE);  // and give up!
+    }
+    sub[slot].udp_volts[0] = NULL;  // this should never be dereferenced.
+    for (int input = 1; input < MAX_INPUTS + 1; input++) {
+      sub[slot].udp_volts[input] = cursor;
+      cursor += UDP_PER_RF_PER_SUB;
     }
   }
 
