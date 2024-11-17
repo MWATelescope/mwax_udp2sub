@@ -49,6 +49,23 @@ struct {
   char *local_if;
 } conf;
 
+int ids[65536]  = {0};
+int rmap[65536] = {0};
+int id_count    = 0;
+int input_index(int input) {
+  if (!ids[input]) {
+    ids[input]     = ++id_count;
+    rmap[id_count] = input;
+    if (rmap[id_count] == rmap[id_count - 1]) {
+      printf("same id for %d as %d (both %d)\n", id_count, id_count - 1, input);
+    }
+  }
+  return ids[input];
+}
+
+int empties[600]      = {0};
+int maybeempties[600] = {0};
+
 int UDP_recv_complete = 0;
 void UDP_recv(int channel) {
   if (channel < 1 || channel > 24) return;
@@ -103,9 +120,10 @@ void UDP_recv(int channel) {
   struct mmsghdr *UDP_first_empty_ptr = msgvecs;  // Set our first empty pointer to the address of the 0th element in the array
 
   int retval;
-  int desired = 10000;
+  int desired = 200000;
   int ok      = 0;
   int not_ok  = 0;
+  int empty   = 0;
 
   while (desired > 0) {
     usleep(2100);
@@ -113,7 +131,18 @@ void UDP_recv(int channel) {
 
     for (int i = 0; i < retval; i++) {
       if (UDPbuf[i].packet_type == 0x20 && ntohs(UDPbuf[i].rf_input) > 0 && ntohl(UDPbuf[i].GPS_time) > 1414834700 && ntohl(UDPbuf[i].GPS_time) < 1514834700) {
+        int j = input_index(ntohs(UDPbuf[i].rf_input));
         ok += 1;
+        empty += 1;
+        empties[j] += 1;
+        maybeempties[j] += 1;
+        for (int k = 2047; k--;) {
+          if (UDPbuf[i].volts[k]) {
+            empty -= 1;
+            empties[j] -= 1;
+            break;
+          }
+        }
       } else {
         if (not_ok < 1) {
           printf("     :UDPbuf[i].packet_type = %02x\n", UDPbuf[i].packet_type);
@@ -128,7 +157,8 @@ void UDP_recv(int channel) {
   retval = ok + not_ok;
 
   printf("chan %2d: %8d packets received, ", channel, retval);
-  printf("%5.2f%% of packets ok  (%d bad)\n", ok * 100.0f / retval, retval - ok);
+
+  printf("%5.2f%% of packets ok  (%d bad, %d empty)\n", ok * 100.0f / retval, retval - ok, empty);
 
   mreq.imr_multiaddr.s_addr = inet_addr(conf.multicast_ip);
   mreq.imr_interface.s_addr = inet_addr(conf.local_if);
@@ -171,6 +201,17 @@ int main() {
   for (int i = 1; i < 25; i++) {
     if (i != 22) UDP_recv(i);
   }
+
+  printf("\n");
+
+  for (int i = 1; i <= 6000; i++) {
+    if (ids[i] > 0) {
+      printf("empties for id_idx %4d = %5d (%4.1f%%), ", i, empties[ids[i]], (float)empties[ids[i]] / (float)maybeempties[ids[i]]);
+      printf("    %4d = %5d (%4.1f%%)\n", i + 1, empties[ids[i] + 1], (float)empties[ids[i] + 1] / (float)maybeempties[ids[i + 1]]);
+      i++;
+    }
+  }
+  printf("\n");
 
   free(UDPbuf);  // these frees are only here to make the linter happy.
   free(iovecs);
