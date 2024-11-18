@@ -526,7 +526,6 @@ atomic_int slot_state[4] = {0};  // 0: free, 1: collecting packets, 2: ready to 
 atomic_int meta_state[4] = {0};  // 0: free, 1: metafits read requested, 2: metafits read in progress, 4/5: metafits read succeeded/failed
 
 subobs_udp_meta_t *sub;  // Pointer to the four subobs metadata arrays
-char *blank_sub_line;    // Pointer to a buffer of zeros that's the size of an empty line.  We'll allocate it later and use it for padding out sub files
 char *sub_header;        // Pointer to a buffer that's the size of a sub file header.
 
 bool debug_mode         = false;  // Default to not being in debug mode
@@ -2573,6 +2572,16 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   return 0;
 }
 
+void *calloc_or_die(size_t nmemb, size_t size, char *name) {
+  void *res = calloc(nmemb, size);
+  if (!res) {
+    printf("%s calloc failed\n", name);
+    fflush(stdout);
+    exit(EXIT_FAILURE);
+  }
+  return res;
+}
+
 // ------------------------ Start of world -------------------------
 
 int main(int argc, char **argv) {
@@ -2709,26 +2718,9 @@ int main(int argc, char **argv) {
     UDP_num_slots = 10;
   }
 
-  msgvecs = calloc(2 * UDP_num_slots, sizeof(struct mmsghdr));  // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
-  if (msgvecs == NULL) {                                        // If that failed
-    printf("msgvecs calloc failed\n");                          // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
-
-  iovecs = calloc(UDP_num_slots, sizeof(struct iovec));  // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
-  if (iovecs == NULL) {                                  // If that failed
-    printf("iovecs calloc failed\n");                    // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
-
-  UDPbuf = calloc(UDP_num_slots, sizeof(mwa_udp_packet_t));  // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
-  if (UDPbuf == NULL) {                                      // If that failed
-    printf("UDPbuf calloc failed\n");                        // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
+  msgvecs = calloc_or_die(2 * UDP_num_slots, sizeof(struct mmsghdr), "msgvecs");  // NB Make twice as big an array as the number of actual UDP packets we are going to buffer
+  iovecs  = calloc_or_die(UDP_num_slots, sizeof(struct iovec), "iovecs");         // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
+  UDPbuf  = calloc_or_die(UDP_num_slots, sizeof(mwa_udp_packet_t), "UDPbuf");     // NB Make the *same* number of entries as the number of actual UDP packets we are going to buffer
 
   //---------- Now initialize the arrays
 
@@ -2745,26 +2737,11 @@ int main(int argc, char **argv) {
 
   //---------------- Allocate the RAM we need for the subobs pointers and metadata and initialise it ------------------------
 
-  sub = calloc(SUB_SLOTS, sizeof(subobs_udp_meta_t));  // Make 4 slots to store the metadata against the maximum 4 subobs that can be open at one time
-  if (sub == NULL) {                                   // If that failed
-    printf("sub calloc failed\n");                     // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
+  sub = calloc_or_die(SUB_SLOTS, sizeof(subobs_udp_meta_t), "sub");  // Make 4 slots to store the metadata against the maximum 4 subobs that can be open at one time
 
   for (int slot = 0; slot < SUB_SLOTS; slot++) {
-    sub[slot].udp_volts = calloc(MAX_INPUTS + 1, sizeof(char **));
-    if (NULL == sub[slot].udp_volts) {
-      printf("packet payload pointer array calloc failed\n");  // log a message
-      fflush(stdout);
-      exit(EXIT_FAILURE);  // and give up!
-    }
-    char **cursor = calloc(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(char *));
-    if (NULL == cursor) {
-      printf("packet payload pointer array calloc failed\n");  // log a message
-      fflush(stdout);
-      exit(EXIT_FAILURE);  // and give up!
-    }
+    sub[slot].udp_volts    = calloc_or_die(MAX_INPUTS + 1, sizeof(char **), "packet payload pointer pointer array");
+    char **cursor          = calloc_or_die(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(char *), "packet payload pointer array");
     sub[slot].udp_volts[0] = NULL;  // this should never be dereferenced.
     for (int input = 1; input < MAX_INPUTS + 1; input++) {
       sub[slot].udp_volts[input] = cursor;
@@ -2772,19 +2749,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  blank_sub_line = calloc(SUB_LINE_SIZE, sizeof(char));  // Make ourselves a buffer of zeros that's the size of an empty line.  We'll use this for padding out sub file
-  if (blank_sub_line == NULL) {                          // If that failed
-    printf("blank_sub_line calloc failed\n");            // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
-
-  sub_header = calloc(SUBFILE_HEADER_SIZE, sizeof(char));  // Make ourselves a buffer that's initially of zeros that's the size of a sub file header.
-  if (sub_header == NULL) {                                // If that failed
-    printf("sub_header calloc failed\n");                  // log a message
-    fflush(stdout);
-    exit(EXIT_FAILURE);  // and give up!
-  }
+  sub_header = calloc_or_die(SUBFILE_HEADER_SIZE, sizeof(char), "sub_header");  // Make ourselves a buffer that's initially of zeros that's the size of a sub file header.
 
   // Enter delay generator if enabled, then quit
   if (delaygen_enable == true) {
