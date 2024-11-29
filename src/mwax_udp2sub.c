@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 92
-#define THISVER "2.14b"
+#define THISVER "2.14d"
 //
 // 2.14-092     2024-10-23 CJP  major overhaul of buffer state transitions alongside additional logging to catch/repair issues
 //                              with udp2sub locking up after moderate packet loss incidents, and state system documentation.
@@ -482,6 +482,8 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   char ***udp_volts;       // array of arrays of pointers to every udp packet's payload that may be needed for this sub-observation.
                            // NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
                            // also note, entry 0 should never be dereferenced.
+
+  float **udp_arrivals;  // packet arrival times relative to start of subobservation.  Indexed the same way udp_volts is.
 
   tile_meta_t rf_inp[MAX_INPUTS];  // Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file,
                                    // NOT the order udp packets were seen in.
@@ -995,10 +997,13 @@ void *UDP_recv() {
 
 void clear_slot(int slot) {
   memset(sub[slot].udp_volts[1], 0, MAX_INPUTS * UDP_PER_RF_PER_SUB * sizeof(char *));
+  memset(sub[slot].udp_arrivals[1], 0, MAX_INPUTS * UDP_PER_RF_PER_SUB * sizeof(float));
 
-  char ***voltage_save = sub[slot].udp_volts;
+  char ***voltage_save  = sub[slot].udp_volts;
+  float **arrivals_save = sub[slot].udp_arrivals;
   memset(&sub[slot], 0, sizeof(subobs_udp_meta_t));
-  sub[slot].udp_volts = voltage_save;
+  sub[slot].udp_volts    = voltage_save;
+  sub[slot].udp_arrivals = arrivals_save;
 }
 
 //------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1056,11 +1061,13 @@ void *UDP_parse() {
         my_udp->packet_type = 0x21;  // Now change the packet type to a 0x21 to say it's similar to a 0x20 but in host byte order and with a subobs timestamp
       }
 
-      uint32_t now = 0;
+      uint32_t now  = 0;
+      float nowfrac = 0.0f;
       {
         struct timespec this_time;
         clock_gettime(CLOCK_REALTIME, &this_time);
-        now = (this_time.tv_sec - GPS_offset);
+        now     = (this_time.tv_sec - GPS_offset);
+        nowfrac = (float)this_time.tv_nsec / 1.0e9f;
       }
 
       if ((my_udp->packet_type != 0x21) ||  // wrong packet type
@@ -1079,6 +1086,11 @@ void *UDP_parse() {
                          my_udp->packet_type, my_udp->GPS_time, now, my_udp->rf_input, my_udp->edt2udp_token);
         UDP_removed_from_buff++;  // Flag it as used and release the buffer slot.  We don't want to see it again.
         continue;                 // start the loop again
+      }
+
+      float relative_arrival_time = (float)(now - my_udp->GPS_time) + nowfrac;
+      if (relative_arrival_time == 0.0f) {
+        relative_arrival_time = FLT_MIN;
       }
 
       //---------- If this packet is for the same sub obs as the previous packet, we can assume a bunch of things haven't changed or rolled over, otherwise we have things to check
@@ -1167,6 +1179,8 @@ void *UDP_parse() {
         // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.
         // The dimensions are rf_input (sorted by the order in which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs.
         // By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
+
+        sub[slot_index].udp_arrivals[rf_ndx][my_udp->subsec_time] = relative_arrival_time;
 
         this_sub->last_udp = UDP_removed_from_buff;  // The last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain
         this_sub->udp_count++;                       // Add one to the number of udp packets seen this sub obs.
@@ -2174,6 +2188,19 @@ void *makesub() {
         int delay_table_offset = delay_table_start - block0_add;
         int delay_table_length = delay_table_end - delay_table_start;
 
+        uint8_t *arrival_times_start = (uint8_t *)dest;
+
+        for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
+          rfm             = &subm->rf_inp[MandC_rf];  // Tile metadata
+          uint16_t row    = subm->rf2ndx[rfm->rf_input];
+          float *arrivals = sub[slot_index].udp_arrivals[row];
+          dest=mempcpy(dest, arrivals, sizeof(float)*UDP_PER_RF_PER_SUB);
+        }
+
+        uint8_t *arrival_times_end  = (uint8_t *)dest;
+        int arrival_times_offset = arrival_times_start - (uint8_t *)block0_add;
+        int arrival_times_length = arrival_times_end - arrival_times_start;
+
         //---------- Write out the dummy map ----------
         // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
 
@@ -2237,6 +2264,7 @@ void *makesub() {
               {"PACKET_MAP", packet_map_offset, packet_map_length},
               {"DELAY_TABLE", delay_table_offset, delay_table_length},
               {"MARGIN_DATA", margin_data_offset, margin_data_length},
+              {"ARRIVAL_TIMES", arrival_times_offset, arrival_times_length},
           };
           int lds = sizeof(data_sections) / sizeof(data_sections[0]);
           build_subfile_header(subm, transfer_size, ninputs_xgpu, data_sections, lds);
@@ -2745,6 +2773,16 @@ int main(int argc, char **argv) {
     sub[slot].udp_volts[0] = NULL;  // this should never be dereferenced.
     for (int input = 1; input < MAX_INPUTS + 1; input++) {
       sub[slot].udp_volts[input] = cursor;
+      cursor += UDP_PER_RF_PER_SUB;
+    }
+  }
+
+  for (int slot = 0; slot < SUB_SLOTS; slot++) {
+    sub[slot].udp_arrivals    = calloc_or_die(MAX_INPUTS + 1, sizeof(float *), "packet arrival time pointer array");
+    float *cursor             = calloc_or_die(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(float), "packet arrival time array");
+    sub[slot].udp_arrivals[0] = NULL;  // this should never be dereferenced.
+    for (int input = 1; input < MAX_INPUTS + 1; input++) {
+      sub[slot].udp_arrivals[input] = cursor;
       cursor += UDP_PER_RF_PER_SUB;
     }
   }
