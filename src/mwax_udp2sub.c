@@ -6,8 +6,11 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 92
-#define THISVER "2.14d"
+#define BUILD 93
+#define THISVER "2.15"
+//
+// 2.15-093     2024-12-05 CJP  added packet arrival time logging, simplified pointer buffer allocating/clearing, standardised types.
+//                              DRYed allocation failures, added logging of rejected packets.
 //
 // 2.14-092     2024-10-23 CJP  major overhaul of buffer state transitions alongside additional logging to catch/repair issues
 //                              with udp2sub locking up after moderate packet loss incidents, and state system documentation.
@@ -2194,12 +2197,12 @@ void *makesub() {
           rfm             = &subm->rf_inp[MandC_rf];  // Tile metadata
           uint16_t row    = subm->rf2ndx[rfm->rf_input];
           float *arrivals = sub[slot_index].udp_arrivals[row];
-          dest=mempcpy(dest, arrivals, sizeof(float)*UDP_PER_RF_PER_SUB);
+          dest            = mempcpy(dest, arrivals, sizeof(float) * UDP_PER_RF_PER_SUB);
         }
 
-        uint8_t *arrival_times_end  = (uint8_t *)dest;
-        int arrival_times_offset = arrival_times_start - (uint8_t *)block0_add;
-        int arrival_times_length = arrival_times_end - arrival_times_start;
+        uint8_t *arrival_times_end = (uint8_t *)dest;
+        int arrival_times_offset   = arrival_times_start - (uint8_t *)block0_add;
+        int arrival_times_length   = arrival_times_end - arrival_times_start;
 
         //---------- Write out the dummy map ----------
         // Input x Packet Number bitmap of dummy packets used. All 1s = no dummy packets.
