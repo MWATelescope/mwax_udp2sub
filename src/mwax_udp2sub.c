@@ -6,8 +6,11 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 93
-#define THISVER "2.15"
+#define BUILD 94
+#define THISVER "2.16"
+//
+// 2.16-094     2024-12-11 CJP  restored dummy buffers for unseen inputs
+//                              protected rf_input mapping from overflow
 //
 // 2.15-093     2024-12-05 CJP  added packet arrival time logging, simplified pointer buffer allocating/clearing, standardised types.
 //                              DRYed allocation failures, added logging of rejected packets.
@@ -484,7 +487,8 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   uint16_t rf2ndx[65536];  // A mapping from the rf_input value to what row in the pointer array its pointers are stored
   char ***udp_volts;       // array of arrays of pointers to every udp packet's payload that may be needed for this sub-observation.
                            // NB: THIS ARRAY IS IN THE ORDER INPUTS WERE SEEN STARTING AT 1!, NOT THE SUB FILE ORDER!
-                           // also note, entry 0 should never be dereferenced.
+                           // entry 0 is a dummy row that is used whenever the metadata requests an rf_input but no packets arrived
+                           // for it during this subobs (eg for a partial subobs at startup, or if there's been a misconfiguration)
 
   float **udp_arrivals;  // packet arrival times relative to start of subobservation.  Indexed the same way udp_volts is.
 
@@ -612,7 +616,7 @@ void report_substatus(char *thread_name, char *status, ...) {
     vprintf(status, arguments);
     va_end(arguments);
     if (repeat_count > 5) {
-      printf("(%lu repeats)", repeat_count);
+      printf(" (%lu repeats)", repeat_count);
     }
     printf("\n");
     fflush(stdout);
@@ -1176,14 +1180,20 @@ void *UDP_parse() {
           this_sub->rf_seen++;                                     // Increase the number of different rf inputs seen so far.  START AT 1, NOT 0!
           this_sub->rf2ndx[my_udp->rf_input] = this_sub->rf_seen;  // and assign that number for this rf input's metadata index
           rf_ndx                             = this_sub->rf_seen;  // and get the correct index for this packet too because we'll need that
-        }  // TODO Should check for array overrun.  ie that rf_seen has grown past MAX_INPUTS (or is it plus or minus one?)
+          if (rf_ndx > MAX_INPUTS) {
+            report_substatus("UDP_parse", "subobs %d slot %d. More than %d unique inputs seen, discarding rf_input %4d (%dth seen)", my_udp->GPS_time, slot_index, MAX_INPUTS,
+                             my_udp->rf_input, rf_ndx);
+          }
+        }
 
-        sub[slot_index].udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
-        // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.
-        // The dimensions are rf_input (sorted by the order in which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs.
-        // By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
+        if (rf_ndx <= MAX_INPUTS) {
+          sub[slot_index].udp_volts[rf_ndx][my_udp->subsec_time] = (char *)my_udp->volts;  // This is an important line so lets unpack what it does and why.
+          // The 'this_sub' struct stores a 2D array of pointers (udp_volt) to all the udp payloads that apply to that sub obs.
+          // The dimensions are rf_input (sorted by the order in which they were seen on the incoming packet stream) and the packet count (0 to 5001) inside the subobs.
+          // By this stage, seconds and subsecs have been merged into a single number so subsec time is already in the range 0 to 5001
 
-        sub[slot_index].udp_arrivals[rf_ndx][my_udp->subsec_time] = relative_arrival_time;
+          sub[slot_index].udp_arrivals[rf_ndx][my_udp->subsec_time] = relative_arrival_time;
+        }
 
         this_sub->last_udp = UDP_removed_from_buff;  // The last udp packet seen so far for this sub. (0 based) Eventually it won't be updated and the final value will remain
         this_sub->udp_count++;                       // Add one to the number of udp packets seen this sub obs.
@@ -2771,20 +2781,20 @@ int main(int argc, char **argv) {
   sub = calloc_or_die(SUB_SLOTS, sizeof(subobs_udp_meta_t), "sub");  // Make 4 slots to store the metadata against the maximum 4 subobs that can be open at one time
 
   for (int slot = 0; slot < SUB_SLOTS; slot++) {
-    sub[slot].udp_volts    = calloc_or_die(MAX_INPUTS + 1, sizeof(char **), "packet payload pointer pointer array");
-    char **cursor          = calloc_or_die(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(char *), "packet payload pointer array");
-    sub[slot].udp_volts[0] = NULL;  // this should never be dereferenced.
-    for (int input = 1; input < MAX_INPUTS + 1; input++) {
+    sub[slot].udp_volts = calloc_or_die(MAX_INPUTS + 1, sizeof(char **), "packet payload pointer pointer array");
+    char **cursor       = calloc_or_die(UDP_PER_RF_PER_SUB * (MAX_INPUTS + 1), sizeof(char *), "packet payload pointer array");
+    // sub[slot].udp_volts[0] is only dereferenced for writing out dummy data
+    for (int input = 0; input < MAX_INPUTS + 1; input++) {
       sub[slot].udp_volts[input] = cursor;
       cursor += UDP_PER_RF_PER_SUB;
     }
   }
 
   for (int slot = 0; slot < SUB_SLOTS; slot++) {
-    sub[slot].udp_arrivals    = calloc_or_die(MAX_INPUTS + 1, sizeof(float *), "packet arrival time pointer array");
-    float *cursor             = calloc_or_die(UDP_PER_RF_PER_SUB * MAX_INPUTS, sizeof(float), "packet arrival time array");
-    sub[slot].udp_arrivals[0] = NULL;  // this should never be dereferenced.
-    for (int input = 1; input < MAX_INPUTS + 1; input++) {
+    sub[slot].udp_arrivals = calloc_or_die(MAX_INPUTS + 1, sizeof(float *), "packet arrival time pointer array");
+    float *cursor          = calloc_or_die(UDP_PER_RF_PER_SUB * (MAX_INPUTS + 1), sizeof(float), "packet arrival time array");
+    // sub[slot].udp_arrivals[0] is only dereferenced for wriring out dummy data
+    for (int input = 0; input < MAX_INPUTS + 1; input++) {
       sub[slot].udp_arrivals[input] = cursor;
       cursor += UDP_PER_RF_PER_SUB;
     }
