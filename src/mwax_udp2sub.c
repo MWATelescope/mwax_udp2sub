@@ -7,7 +7,9 @@
 // Commenced 2017-05-25
 //
 #define BUILD 94
-#define THISVER "2.16"
+#define THISVER "2.16b"
+
+// 2.16b-094    2025-02-13 CJP  broaden free file selection criteria
 //
 // 2.16-094     2024-12-11 CJP  restored dummy buffers for unseen inputs
 //                              protected rf_input mapping from overflow
