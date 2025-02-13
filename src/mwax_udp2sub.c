@@ -2096,7 +2096,7 @@ void *makesub() {
               sprintf(this_file, "%s/%s", conf.shared_mem_dir, dp->d_name);  // Construct the full file name including path
               if (stat(this_file, &filestats) == 0) {                        // Try to read the file statistics and if they are available
                 last_seen_size = filestats.st_size;
-                if (filestats.st_size == desired_size) {  // If the file is exactly the size we need
+                if (filestats.st_size >= desired_size) {  // If the file is at least the size we need
 
                   // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
 
