@@ -6,8 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 94
-#define THISVER "2.16"
+#define BUILD 95
+#define THISVER "2.17"
+//
+// 2.17-095     2025-02-24 CJP  broaden free file selection criteria
 //
 // 2.16-094     2024-12-11 CJP  restored dummy buffers for unseen inputs
 //                              protected rf_input mapping from overflow
