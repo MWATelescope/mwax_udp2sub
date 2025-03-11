@@ -6,9 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 95
-#define THISVER "2.17"
+#define BUILD 96
+#define THISVER "2.18"
 //
+// 2.18-096     2025-02-24 CJP  free file selection bugfix
 // 2.17-095     2025-02-24 CJP  broaden free file selection criteria
 //
 // 2.16-094     2024-12-11 CJP  restored dummy buffers for unseen inputs
@@ -2050,8 +2051,8 @@ void *makesub() {
       ninputs_pad  = subm->NINPUTS;                    // We don't pad .sub files any more so these two variables are the same
       ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);  // Get this from 'ninputs' rounded up to multiples of 32
 
-      transfer_size = SUB_LINE_SIZE * ninputs_pad * (BLOCKS_PER_SUB + 1);  // Should be 5275648000 for 256T in 160+1 blocks
-      desired_size  = transfer_size + SUBFILE_HEADER_SIZE;                 // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
+      transfer_size = SUB_LINE_SIZE * (size_t)ninputs_pad * (BLOCKS_PER_SUB + 1);  // Should be 5275648000 for 256T in 160+1 blocks
+      desired_size  = transfer_size + SUBFILE_HEADER_SIZE;                         // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
       active_rf_inputs = 0;  // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
@@ -2075,6 +2076,8 @@ void *makesub() {
 
       if (go4sub) {      // If everything is okay so far, enter the next block of code
         go4sub = false;  // but go back to assuming a failure unless we succeed in the next bit
+        report_substatus("makesub", "subobs %d slot %d. Seeking free .free file size %lu or bigger.", sub[slot_index].subobs, slot_index, desired_size);
+        int free_examined = 0;
 
         dir = opendir(conf.shared_mem_dir);  // Open up the shared memory directory
 
@@ -2089,15 +2092,21 @@ void *makesub() {
         free_files     = 0;               // So far, we haven't found any available free files we can reuse
         bad_free_files = 0;               // nor any free files that we *can't* use (wrong size?)
 
-        size_t last_seen_size = 0;
+        size_t last_seen_size    = 0;
+        size_t biggest_seen_size = 0;
         while ((dp = readdir(dir)) != NULL) {                      // Read an entry and while there are still directory entries to look at
           if ((dp->d_type == DT_REG) && (dp->d_name[0] != '.')) {  // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
             if (((len_filename = strlen(dp->d_name)) >= 5) &&
                 (strcmp(&dp->d_name[len_filename - 5], ".free") == 0)) {  // If the filename is at least 5 characters long and the last 5 characters are ".free"
+              free_examined++;
 
               sprintf(this_file, "%s/%s", conf.shared_mem_dir, dp->d_name);  // Construct the full file name including path
               if (stat(this_file, &filestats) == 0) {                        // Try to read the file statistics and if they are available
+                if (biggest_seen_size < filestats.st_size) {
+                  biggest_seen_size = filestats.st_size;
+                }
                 last_seen_size = filestats.st_size;
+
                 if (filestats.st_size >= desired_size) {  // If the file is at least the size we need
 
                   // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
@@ -2118,8 +2127,9 @@ void *makesub() {
         }
         closedir(dir);
         if (!go4sub) {
-          report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %d to use for subfile. (last size seen = %d)", sub[slot_index].subobs, slot_index,
-                           desired_size, last_seen_size);
+          report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %lu to use for subfile. ", sub[slot_index].subobs, slot_index, desired_size);
+          report_substatus("makesub", "subobs %d slot %d. (last size seen = %lu, biggest size seen = %lu, free_examined = %d)", sub[slot_index].subobs, slot_index, last_seen_size,
+                           biggest_seen_size, free_examined);
         }
       }
 
