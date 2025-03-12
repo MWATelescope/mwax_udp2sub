@@ -2094,6 +2094,7 @@ void *makesub() {
 
         size_t last_seen_size    = 0;
         size_t biggest_seen_size = 0;
+        size_t selected_size     = 0;
         while ((dp = readdir(dir)) != NULL) {                      // Read an entry and while there are still directory entries to look at
           if ((dp->d_type == DT_REG) && (dp->d_name[0] != '.')) {  // If it's a regular file (ie not a directory or a named pipe etc) and it's not hidden
             if (((len_filename = strlen(dp->d_name)) >= 5) &&
@@ -2107,16 +2108,16 @@ void *makesub() {
                 }
                 last_seen_size = filestats.st_size;
 
+                printf("File %s has size = %11lu and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec);
                 if (filestats.st_size >= desired_size) {  // If the file is at least the size we need
-
-                  // printf( "File %s has size = %ld and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec );
 
                   free_files++;  // That's one more we can use!
 
                   if (filestats.st_ctim.tv_sec < earliest_file) {  // and this file has been there longer than the longest one we've found so far (ctime)
                     earliest_file = filestats.st_ctim.tv_sec;      // We have a new 'oldest' time to beat
                     strcpy(best_file, this_file);                  // and we'll store its name
-                    go4sub = true;                                 // We've found at least one file we can reuse.  It may not be the best, but we know we can do this now.
+                    selected_size = filestats.st_size;
+                    go4sub        = true;  // We've found at least one file we can reuse.  It may not be the best, but we know we can do this now.
                   }
                 } else {
                   bad_free_files++;  // That's one more we can use!
@@ -2128,9 +2129,11 @@ void *makesub() {
         closedir(dir);
         if (!go4sub) {
           report_substatus("makesub", "subobs %d slot %d. Can't find any free files of size %lu to use for subfile. ", sub[slot_index].subobs, slot_index, desired_size);
-          report_substatus("makesub", "subobs %d slot %d. (last size seen = %lu, biggest size seen = %lu, free_examined = %d)", sub[slot_index].subobs, slot_index, last_seen_size,
-                           biggest_seen_size, free_examined);
+        } else {
+          report_substatus("makesub", "subobs %d slot %d. Using free file of size %lu to use for subfile. ", sub[slot_index].subobs, slot_index, selected_size);
         }
+        report_substatus("makesub", "subobs %d slot %d. (last size seen = %lu, biggest size seen = %lu, free_examined = %d)", sub[slot_index].subobs, slot_index, last_seen_size,
+                         biggest_seen_size, free_examined);
       }
 
       //---------- Try to mmap that file (assuming we found one) so we can treat it like RAM (which it actually is) ----------
