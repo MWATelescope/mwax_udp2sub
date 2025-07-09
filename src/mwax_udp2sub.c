@@ -6,9 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 96
-#define THISVER "2.18"
+#define BUILD 97
+#define THISVER "2.19"
 //
+// 2.19-097     2025-02-24 CJP  quieter logging
 // 2.18-096     2025-02-24 CJP  free file selection bugfix
 // 2.17-095     2025-02-24 CJP  broaden free file selection criteria
 //
