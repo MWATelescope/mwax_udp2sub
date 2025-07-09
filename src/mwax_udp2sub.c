@@ -459,8 +459,9 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int64_t udp_at_start_write;
   int64_t udp_at_end_write;
 
-  int udp_count;  // The number of udp packets collected from the NIC
-  int udp_dummy;  // The number of dummy packets we needed to insert to pad things out
+  int udp_count;             // The number of udp packets collected from the NIC
+  int udp_dummy;             // The number of dummy packets we needed to insert to pad things out
+  int ignored_packet_count;  // count RRI packets ignored during a supersampled obervation
 
   int meta_msec_wait;  // The number of milliseconds it took to from reading the last metafits to finding a new one
   int meta_msec_took;  // The number of milliseconds it took to read the metafits
@@ -1092,8 +1093,15 @@ void *UDP_parse() {
           my_udp->edt2udp_token = ntohs(my_udp->edt2udp_token);  // Convert edt2udp_token to a usable uint16_t
         }
 
-        report_substatus("UDP_parse", "rejecting packet (packet_type=0x%02x, GPS_time=%d, (now=%d), rf_input=%d, edt2udp_token=0x%04x",  //
-                         my_udp->packet_type, my_udp->GPS_time, now, my_udp->rf_input, my_udp->edt2udp_token);
+        if (my_udp->packet_type == MWA_PACKET_TYPE_LEGACY && expected_packet_type == MWA_PACKET_TYPE_OVERSAMPLING) {
+          // don't log individual packets that were just the wrong sample rate,
+          // lest we flood the log with NI/RRI packets during oversample observations
+          int report_index = (my_udp->GPS_time >> 3) & 0b11;  // pick a slot in which to increment the ignore count
+          sub[report_index].ignored_packet_count++;
+        } else {
+          report_substatus("UDP_parse", "rejecting packet (packet_type=0x%02x, GPS_time=%d, (now=%d), rf_input=%d, edt2udp_token=0x%04x",  //
+                           my_udp->packet_type, my_udp->GPS_time, now, my_udp->rf_input, my_udp->edt2udp_token);
+        }
         UDP_removed_from_buff++;  // Flag it as used and release the buffer slot.  We don't want to see it again.
         continue;                 // start the loop again
       }
@@ -1118,7 +1126,7 @@ void *UDP_parse() {
 
           // First we need to know if this is simply the next chronological subobs, or if we have skipped ahead.
           // NB that a closedown packet will look like we skipped ahead to 2106.
-          // If we've skipped ahead then all current subobs need to be closed.
+          // If we've skipped ahead, then all current subobs need to be closed.
           uint32_t start_old = start_window;
           uint32_t end_old   = end_window;
           if (my_udp->GPS_time == end_window + 8) {  // just moving up one subobservation, keep this one and the previous one open.
@@ -1673,7 +1681,6 @@ void add_meta_fits() {
   int64_t bcsf_obsid;  // 'best candidate so far' for the metafits file
   int64_t mf_obsid;
 
-  int loop;
   int slot_index;  // slot to read metafits for.
   bool go4meta;
 
@@ -1709,7 +1716,7 @@ void add_meta_fits() {
 
     slot_index = -1;  // Start by assuming there's nothing to do
 
-    for (loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
+    for (int loop = 0; loop < SUB_SLOTS; loop++) {  // Look through all four subobs meta arrays
 
       if ((slot_state[loop] == 6) && (meta_state[loop] < 2)) {   // If we are in the process of abandoning this slot, but haven't started reading metadata yet
         meta_state[loop] = 6;                                    // metadata read cancelled, the clearing thread doesn't need to wait for metadata read completion.
@@ -1954,7 +1961,6 @@ void *makesub() {
   size_t transfer_size;
   size_t desired_size;  // The total size (including header and zeroth block) that this sub file needs to be
 
-  int loop;
   int slot_index;  // index of slot to write out
   int left_this_line;
   int sub_result;  // Temp storage for the result before we write it back to the array for others to see.  Once we do that, we can't change our mind.
@@ -2002,7 +2008,7 @@ void *makesub() {
 
     slot_index = -1;  // Start by assuming there's nothing to write out
 
-    for (loop = 0; loop < 4; loop++) {                       // Look through all four subobs meta arrays
+    for (int loop = 0; loop < 4; loop++) {                   // Look through all four subobs meta arrays
       if (slot_state[loop] == 2 && meta_state[loop] == 4) {  // If this sub is ready to write out
         if (slot_index == -1) {                              // check if we've already found a different one to write out and if we haven't
           slot_index = loop;                                 // then mark this one as the best so far
@@ -2056,7 +2062,7 @@ void *makesub() {
 
       active_rf_inputs = 0;  // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
-      for (loop = 0; loop < ninputs_pad; loop++) {  // populate the metadata array for all rf_inputs in this subobs incl padding ones
+      for (int loop = 0; loop < ninputs_pad; loop++) {  // populate the metadata array for all rf_inputs in this subobs incl padding ones
         my_MandC_meta[loop].rf_input   = subm->rf_inp[loop].rf_input;
         my_MandC_meta[loop].start_byte = (UDP_PAYLOAD_SIZE + (subm->rf_inp[loop].ws_delay * 2));  // NB: Each delay is a sample, ie two bytes, not one!!!
         my_MandC_meta[loop].seen_order =
@@ -2108,7 +2114,7 @@ void *makesub() {
                 }
                 last_seen_size = filestats.st_size;
 
-                printf("File %s has size = %11lu and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec);
+                // printf("File %s has size = %11lu and a ctime of %ld\n", this_file, filestats.st_size, filestats.st_ctim.tv_sec);
                 if (filestats.st_size >= desired_size) {  // If the file is at least the size we need
 
                   free_files++;  // That's one more we can use!
@@ -2368,9 +2374,10 @@ void *makesub() {
       slot_state[slot_index] = sub_result;  // Record that we've finished working on this one even if we gave up.  Will be a 4 or a 5 depending on whether it worked or not.
 
       report_substatus("makesub", "subobs %d slot %d. Finished writing.", sub[slot_index].subobs, slot_index);
-      printf("now=%ld,so=%d,ob=%ld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%ld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d\n", (int64_t)(ended_sub_write_time.tv_sec - GPS_offset),
-             subm->subobs, subm->GPSTIME, subm->MODE, slot_state[slot_index], free_files, bad_free_files, subm->msec_wait, subm->msec_took,
-             subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs);
+      printf("now=%ld,so=%d,ob=%ld,%s,st=%d,free=%d:%d,wait=%d,took=%d,used=%ld,count=%d,dummy=%d,rf_inps=w%d:s%d:c%d,skipped (undersampled)=%d\n",
+             (int64_t)(ended_sub_write_time.tv_sec - GPS_offset), subm->subobs, subm->GPSTIME, subm->MODE, slot_state[slot_index], free_files, bad_free_files, subm->msec_wait,
+             subm->msec_took, subm->udp_at_end_write - subm->first_udp, subm->udp_count, subm->udp_dummy, subm->NINPUTS, subm->rf_seen, active_rf_inputs,
+             subm->ignored_packet_count);
 
       fflush(stdout);
     }
