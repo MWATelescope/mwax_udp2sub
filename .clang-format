@@ -1,8 +1,8 @@
 ---
 BasedOnStyle: Google
 ---
-Language: Cpp
+Language: C
 AlignConsecutiveAssignments: true
 ColumnLimit: 180
 SortIncludes: Never
-
+PointerAlignment: Right
