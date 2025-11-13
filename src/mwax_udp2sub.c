@@ -831,10 +831,14 @@ void read_config(char *file, char *shared_file, char *us, int inst, int coarse_c
   *config = available_config[instance_ndx];  // Copy the relevant line into the structure we were passed a pointer to
   load_mwax_config(shared_file, config);
 
-  if (coarse_chan > 0) {                                          // If there is a coarse channel override on the command line
+  if (coarse_chan > 0) {  // If there is a coarse channel override on the command line
+    printf("overriding multicast_ip and UDPport\n");
+    printf("  was: %s:%d\n", config->multicast_ip, config->UDPport);
     config->coarse_chan = coarse_chan;                            // Force the coarse chan from 01 to 24 with that value
     sprintf(config->multicast_ip, "239.255.90.%d", coarse_chan);  // Multicast ip is 239.255.90.xx
     config->UDPport = 59000 + coarse_chan;                        // Multicast port address is the forced coarse channel number plus an offset of 59000
+    printf("  now: %s:%d\n", config->multicast_ip, config->UDPport);
+    printf("\n");
   }
 
   monitor.coarse_chan = config->coarse_chan;
