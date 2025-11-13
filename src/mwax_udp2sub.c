@@ -256,8 +256,7 @@
 #include <fitsio.h>
 #include <stdarg.h>
 
-#include "vec3.h"
-
+#define deg2rad(x) (x * M_PIl / 180L)
 //---------------- and some new friends -------------------
 
 #define SUB_SLOTS 4
@@ -1246,12 +1245,9 @@ void *UDP_parse() {
 }
 
 long double get_path_difference(long double north, long double east, long double height, long double alt, long double az) {
-  vec3_t A        = (vec3_t){north, east, height};
-  vec3_t B        = (vec3_t){0, 0, 0};
-  vec3_t AB       = vec3_subtract(B, A);
-  vec3_t ACn      = vec3_unit(deg2rad(alt), deg2rad(az));
-  long double ACr = vec3_dot(AB, ACn);
-  return ACr;
+  double b = deg2rad(alt);
+  double a = deg2rad(az);
+  return -north * cosl(a) * cosl(b) - east * sinl(a) * cosl(b) - height * sinl(b);
 }
 
 int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, char *verbose_keyname, void *value, char *comm, int *status) {
