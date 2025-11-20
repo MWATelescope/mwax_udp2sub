@@ -1975,7 +1975,7 @@ void *makesub() {
 
   int block;         // loop variable
   int MandC_rf;      // loop variable
-  int ninputs_pad;   // The number of inputs in the sub file padded out with any needed dummy tiles (used to be a thing but isn't any more)
+  int ninputs;       // The number of inputs in the sub file
   int ninputs_xgpu;  // The number of inputs in the sub file but padded out to whatever number xgpu needs to deal with them in (not actually padded until done by Ian's code later)
 
   MandC_meta_t my_MandC_meta[MAX_INPUTS];  // Working copies of the changeable metafits/metabin data for this subobs
@@ -2055,19 +2055,19 @@ void *makesub() {
 
       go4sub = true;  // Say it all looks okay so far
 
-      ninputs_pad  = subm->NINPUTS;                    // We don't pad .sub files any more so these two variables are the same
+      ninputs      = subm->NINPUTS;                    // We don't pad .sub files any more so these two variables are the same
       ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);  // Get this from 'ninputs' rounded up to multiples of 32
 
-      transfer_size = SUB_LINE_SIZE * (size_t)ninputs_pad * (BLOCKS_PER_SUB + 1);  // Should be 5275648000 for 256T in 160+1 blocks
-      desired_size  = transfer_size + SUBFILE_HEADER_SIZE;                         // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
+      transfer_size = SUB_LINE_SIZE * (size_t)ninputs * (BLOCKS_PER_SUB + 1);  // Should be 5275648000 for 256T in 160+1 blocks
+      desired_size  = transfer_size + SUBFILE_HEADER_SIZE;                     // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
 
       active_rf_inputs = 0;  // The number of rf_inputs that we want in the sub file and sent at least 1 udp packet
 
-      for (int loop = 0; loop < ninputs_pad; loop++) {  // populate the metadata array for all rf_inputs in this subobs incl padding ones
+      for (int loop = 0; loop < ninputs; loop++) {  // populate the metadata array for all rf_inputs in this subobs
         my_MandC_meta[loop].rf_input   = subm->rf_inp[loop].rf_input;
         my_MandC_meta[loop].start_byte = (UDP_PAYLOAD_SIZE + (subm->rf_inp[loop].ws_delay * 2));  // NB: Each delay is a sample, ie two bytes, not one!!!
         my_MandC_meta[loop].seen_order =
-            subm->rf2ndx[my_MandC_meta[loop].rf_input];               // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with padded zeros
+            subm->rf2ndx[my_MandC_meta[loop].rf_input];               // If they weren't seen, they will be 0 which maps to NULL pointers which will be replaced with zeros
         if (my_MandC_meta[loop].seen_order != 0) active_rf_inputs++;  // seen_order starts at 1. If it's 0 that means we didn't even get 1 udp packet for this rf_input
       }
 
@@ -2185,13 +2185,13 @@ void *makesub() {
         char *block0_add = dest;  // 0th block is after the 4k header,and just contains metadata;
 
         // Work out block1_add now to make it easy for us to 'pad out' the 0th block to a full block size.
-        char *block1_add = dest + (ninputs_pad * SUB_LINE_SIZE);  // address of the 1st data block, after the 0th block.
+        char *block1_add = dest + (ninputs * SUB_LINE_SIZE);  // address of the 1st data block, after the 0th block.
 
         //---------- Write out the 0th block (the tile metadata block) ----------
 
         char *delay_table_start = dest;
 
-        for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {  // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
 
           rfm = &subm->rf_inp[MandC_rf];  // Get a temp pointer for this tile's metadata
 
@@ -2225,7 +2225,7 @@ void *makesub() {
 
         uint8_t *arrival_times_start = (uint8_t *)dest;
 
-        for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
           rfm             = &subm->rf_inp[MandC_rf];  // Tile metadata
           uint16_t row    = subm->rf2ndx[rfm->rf_input];
           float *arrivals = sub[slot_index].udp_arrivals[row];
@@ -2243,7 +2243,7 @@ void *makesub() {
 
         uint32_t packet_map_stride = (UDP_PER_RF_PER_SUB - 2 + 7) / 8;  // round up the row size to ensure all the bits will still fit if UDP_PER_RF_PER_SUB%8 stops being 0
 
-        for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
           rfm            = &subm->rf_inp[MandC_rf];  // Tile metadata
           uint16_t row   = subm->rf2ndx[rfm->rf_input];
           char **packets = sub[slot_index].udp_volts[row];
@@ -2267,7 +2267,7 @@ void *makesub() {
          */
         char *block0_margin_start = dest;
 
-        for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
           my_MandC = &my_MandC_meta[MandC_rf];
 
           char **packets = sub[slot_index].udp_volts[my_MandC->seen_order];
@@ -2309,9 +2309,9 @@ void *makesub() {
         //---------- Write out the voltage data blocks ----------
         dest = block1_add;  // Set our write pointer to the beginning of block 1
 
-        for (block = 1; block <= BLOCKS_PER_SUB; block++) {         // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
-          for (MandC_rf = 0; MandC_rf < ninputs_pad; MandC_rf++) {  // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.
-                                                                    // This is likely to be similar to the list we actually saw, but may not be identical!
+        for (block = 1; block <= BLOCKS_PER_SUB; block++) {     // We have 160 (or whatever) blocks of real data to write out. We'll do them in time order (50ms each)
+          for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // Now step through the M&C ordered rf inputs for the inputs the M&C says should be included in the sub file.
+                                                                // This is likely to be similar to the list we actually saw, but may not be identical!
             my_MandC = &my_MandC_meta[MandC_rf];  // Make a temporary pointer to the M&C metadata for this rf input.  NB these are sorted in order they need to be written out as
                                                   // opposed to the order the packets arrived.
 
