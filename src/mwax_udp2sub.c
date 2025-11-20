@@ -407,30 +407,8 @@ typedef struct tile_meta {  // Structure format for the metadata associated with
 
 } tile_meta_t;
 
-/*typedef struct block_0_tile_metadata {   // Structure format for the metadata line for each tile stored in the first block of the sub file.
-    uint16_t rf_input;                     // What's the tile & pol identifier we'll see in the udp packets for this input?
-    int16_t ws_delay;                      // The whole sample delay for this tile, for this subobservation?  Will often be negative!
-    int32_t initial_delay;
-    int32_t delta_delay;
-    int32_t delta_delta_delay;
-    int16_t num_pointings;                 // Initially 1, but might grow to 10 or more if beamforming.  The first pointing is for delay tracking in the correlator.
-    int16_t frac_delay[POINTINGS_PER_SUB]; // 1601 Fractional delays in units of 1000th of a whole sample time.
-                                           // Not supposed to be out of range of -2000 to 2000 millisamples (inclusive).
-
-} block_0_tile_metadata_t;*/
-
-// typedef struct delay_table_entry {      // Structure format for the metadata line for each tile stored in the first block of the sub file.
-//     uint16_t rf_input;                  // What's the tile & pol identifier we'll see in the udp packets for this input?
-//     int16_t ws_delay;                   // The whole sample delay for this tile, for this subobservation?  Will often be negative!
-//     int32_t initial_delay;
-//     int32_t delta_delay;
-//     int32_t delta_delta_delay;
-//
-//     int16_t num_pointings;                 // Initially 1, but might grow to 10 or more if beamforming.  The 1st pointing is for delay tracking in the correlator.
-//     int32_t frac_delay[POINTINGS_PER_SUB]; // 1601 Fractional delays in units of a millionth of a whole sample time.
-//                                            // Not supposed to be out of range of -2000 to 2000 millisamples (inclusive).
-// } delay_table_entry_t;
 #pragma pack(push, 1)
+
 // structure for each signal path
 typedef struct delay_table_entry {
   uint16_t rf_input;
@@ -445,6 +423,15 @@ typedef struct delay_table_entry {
   int16_t reserved;
   float frac_delay[POINTINGS_PER_SUB];  // 1600 fractional delays in fractions of a whole sample time.  Not supposed to be out of range of -1 to 1 samples (inclusive).
 } delay_table_entry_t;
+
+typedef struct delay_table2_entry {
+  uint16_t rf_input;
+  int16_t ws_delay;  // The whole-sample delay for this signal path, for the entire sub-observation.  Will often be negative.
+  float start_total_delay;
+  float middle_total_delay;
+  float end_total_delay;
+} delay_table2_entry_t;
+
 #pragma pack(pop)
 
 typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation metadata that tracks the sorted location of the udp packets
@@ -1982,8 +1969,6 @@ void *makesub() {
   MandC_meta_t *my_MandC;                  // Make a temporary pointer to the M&C metadata for one rf input
 
   delay_table_entry_t block_0_working;  // Construct a single tile's metadata struct to write to the 0th block.  We'll update and write this out as we step through tiles.
-  double w_initial_delay;               // tile's initial fractional delay (times 2^20) working copy
-  double w_delta_delay;                 // tile's initial fractional delay step (like its 1st derivative)
 
   int source_packet;  // which packet (of 5002) contains the first byte of data we need
   int source_offset;  // what is the offset in that packet of the first byte we need
@@ -2055,8 +2040,8 @@ void *makesub() {
 
       go4sub = true;  // Say it all looks okay so far
 
-      ninputs      = subm->NINPUTS;                    // We don't pad .sub files any more so these two variables are the same
-      ninputs_xgpu = ((subm->NINPUTS + 31) & 0xffe0);  // Get this from 'ninputs' rounded up to multiples of 32
+      ninputs      = subm->NINPUTS;
+      ninputs_xgpu = (ninputs + 31) & 0xffe0;  // Get this from 'ninputs' rounded up to multiples of 32
 
       transfer_size = SUB_LINE_SIZE * (size_t)ninputs * (BLOCKS_PER_SUB + 1);  // Should be 5275648000 for 256T in 160+1 blocks
       desired_size  = transfer_size + SUBFILE_HEADER_SIZE;                     // Should be 5275652096 for 256T in 160+1 blocks plus 4K header (1288001 x 4K for dd to make)
@@ -2191,17 +2176,17 @@ void *makesub() {
 
         char *delay_table_start = dest;
 
-        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // The zeroth block is the size of the number of inputs times SUB_LINE_SIZE.
 
           rfm = &subm->rf_inp[MandC_rf];  // Get a temp pointer for this tile's metadata
 
           block_0_working.rf_input         = rfm->rf_input;  // Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
           block_0_working.ws_delay_applied = rfm->ws_delay;  // Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
 
-          w_initial_delay = rfm->initial_delay;  // Copy the tile's initial fractional delay (times 2^20) to a working copy we can update as we step through the delays
-          w_delta_delay   = rfm->delta_delay;    // Copy the tile's initial fractional delay step (~ 1st derivative) to a working copy we can update as we step through the delays
+          double w_initial_delay = rfm->initial_delay;  // Copy the tile's initial fractional delay to a working copy we can update as we step through the delays
+          double w_delta_delay   = rfm->delta_delay;    // Copy the tile's initial fractional delay step to a working copy we can update as we step through the delays
 
-          block_0_working.initial_delay = w_initial_delay;  // Copy the tile's initial fractional delay (times 2^20) to the structure we're about to write to the 0th block
+          block_0_working.initial_delay = w_initial_delay;  // Copy the tile's initial fractional delay to the structure we're about to write to the 0th block
           block_0_working.delta_delay   = w_delta_delay;  // Copy the tile's initial fractional delay step (~ 1st derivative) to the structure we're about to write to the 0th block
           block_0_working.delta_delta_delay  = rfm->delta_delta_delay;  // Copy the tile's fractional delay step's step  to the structure we're about to write to the 0th block
           block_0_working.start_total_delay  = rfm->start_total_delay;
@@ -2223,6 +2208,24 @@ void *makesub() {
         int delay_table_offset = delay_table_start - block0_add;
         int delay_table_length = delay_table_end - delay_table_start;
 
+        char *delay_table2_start = dest;
+
+        delay_table2_entry_t *delay_table2_entry = (delay_table2_entry_t *)dest;
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
+          rfm = &subm->rf_inp[MandC_rf];                      // Get a temp pointer for this tile's metadata
+
+          delay_table2_entry->rf_input           = rfm->rf_input;  // Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
+          delay_table2_entry->ws_delay           = rfm->ws_delay;  // Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+          delay_table2_entry->start_total_delay  = (float)rfm->start_total_delay;
+          delay_table2_entry->middle_total_delay = (float)rfm->middle_total_delay;
+          delay_table2_entry->end_total_delay    = (float)rfm->end_total_delay;
+          delay_table2_entry++;
+        }
+        dest = (char *)delay_table2_entry;
+
+        char *delay_table2_end       = dest;
+        int delay_table2_offset      = delay_table2_start - block0_add;
+        int delay_table2_length      = delay_table2_end - delay_table2_start;
         uint8_t *arrival_times_start = (uint8_t *)dest;
 
         for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
@@ -2295,12 +2298,15 @@ void *makesub() {
 
         //---------- Make a 4K ASCII header for the sub file ----------
         {
+          // clang-format off
           data_section data_sections[] = {
-              {"PACKET_MAP", packet_map_offset, packet_map_length},
-              {"DELAY_TABLE", delay_table_offset, delay_table_length},
-              {"MARGIN_DATA", margin_data_offset, margin_data_length},
+              {"PACKET_MAP",    packet_map_offset,    packet_map_length},
+              {"DELAY_TABLE",   delay_table_offset,   delay_table_length},
+              {"DELAY_TABLE2",  delay_table2_offset,  delay_table2_length},
+              {"MARGIN_DATA",   margin_data_offset,   margin_data_length},
               {"ARRIVAL_TIMES", arrival_times_offset, arrival_times_length},
           };
+          // clang-format on
           int lds = sizeof(data_sections) / sizeof(data_sections[0]);
           build_subfile_header(subm, transfer_size, ninputs_xgpu, data_sections, lds);
           memcpy(ext_shm_buf, sub_header, SUBFILE_HEADER_SIZE);  // Do the memory copy from the preprepared 4K subfile header to the beginning of the sub file
@@ -2435,7 +2441,7 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "MC_SRC_IP 0.0.0.0\n");
   bp += snprintf(bp, ep - bp, "MWAX_U2S_VER " THISVER "-%d\n", BUILD);
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
-  bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 2\n");
+  bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 3\n");
 }
 
 void *heartbeat() {
