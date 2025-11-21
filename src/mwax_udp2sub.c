@@ -311,6 +311,8 @@
 #define MWA_PACKET_TYPE_LEGACY 0x20        // 0x20 == Legacy Mode  2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format).
 #define MWA_PACKET_TYPE_OVERSAMPLING 0x30  // 0x30 == Oversampling Mode 2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format)
 
+#define COHERENT_BEAMS_MAX 10
+
 // In legacy mode, there are 625 packets per second and 2048 samples per packet. This results in 1.28M samples per second.
 // In oversampling mode, there are 800 packets per second and 2048 samples per packet. This results in 1.6384M samples per second.
 
@@ -362,16 +364,10 @@ typedef struct udp2sub_monitor {   // Health packet data
 //---------------- internal structure definitions --------------------
 
 typedef struct altaz_meta {  // Structure format for the metadata associated with the pointing at the beginning, middle and end of the sub-observation
-
   int64_t gpstime;
   float Alt;
   float Az;
   float Dist_km;
-
-  long double SinAzCosAlt;  // will be multiplied by tile East
-  long double CosAzCosAlt;  // will be multiplied by tile North
-  long double SinAlt;       // will be multiplied by tile Height
-
 } altaz_meta_t;
 
 typedef struct tile_meta {  // Structure format for the metadata associated with one rf input for one subobs
@@ -473,6 +469,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int COARSE_CHAN;
   int FINECHAN_hz;
   int INTTIME_msec;
+  int ncoherant_beams;
 
   uint16_t rf_seen;        // The number of different rf_input sources seen so far this sub observation
   uint16_t rf2ndx[65536];  // A mapping from the rf_input value to what row in the pointer array its pointers are stored
@@ -486,7 +483,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   tile_meta_t rf_inp[MAX_INPUTS];  // Metadata about each rf input in an array indexed by the order the input needs to be in the output sub file,
                                    // NOT the order udp packets were seen in.
 
-  altaz_meta_t altaz[3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
+  altaz_meta_t altaz[1 + COHERENT_BEAMS_MAX][3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
 
 } subobs_udp_meta_t;
 
@@ -531,6 +528,7 @@ char *sub_header;        // Pointer to a buffer that's the size of a sub file he
 bool debug_mode         = false;  // Default to not being in debug mode
 bool force_cable_delays = false;  // Always apply cable delays, regardless of metafits
 bool force_geo_delays   = false;  // Always apply geometric delays, regardless of metafits
+int dummy_beams         = 0;      // synthesise this many dummy coherent beams for testing purposes
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // read_config - use our hostname and a command line parameter to find ourselves in the list of possible configurations
@@ -1336,6 +1334,8 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     }
   }
 
+  sub->ncoherant_beams = 0;
+
   subm->COARSE_CHAN = subm->CHANNELS[conf.coarse_chan - 1];  // conf.coarse_chan numbers are 1 to 24 inclusive, but the array index is 0 to 23 incl.
 
   if (subm->COARSE_CHAN == 0) printf("Failed to parse valid coarse channel\n");  // Check we found something plausible
@@ -1552,15 +1552,11 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   if ((subm->GEODEL == 1) ||                                     // If we have been specifically asked for zenith pointings *or*
       ((((subm->subobs - subm->GPSTIME) >> 2) + 3) > ntimes)) {  // if we want times which are past the end of the list available in the metafits
     DEBUG_LOG("Not going to do delay tracking!! GEODEL=%d subobs=%d GPSTIME=%lld ntimes=%ld\n", subm->GEODEL, subm->subobs, subm->GPSTIME, ntimes);
-    for (int loop = 0; loop < 3; loop++) {                    // then we need to put some default values in (ie between observations)
-      subm->altaz[loop].gpstime = (subm->subobs + loop * 4);  // populate the true gps times for the beginning, middle and end of this *sub*observation
-      subm->altaz[loop].Alt     = 90.0;                       // Point straight up (in degrees above horizon)
-      subm->altaz[loop].Az      = 0.0;                        // facing North (in compass degrees)
-      subm->altaz[loop].Dist_km = 0.0;                        // No 'near field' supported between observations so just use 0.
-
-      subm->altaz[loop].SinAzCosAlt = 0L;  // will be multiplied by tile East
-      subm->altaz[loop].CosAzCosAlt = 0L;  // will be multiplied by tile North
-      subm->altaz[loop].SinAlt      = 1L;  // will be multiplied by tile Height
+    for (int loop = 0; loop < 3; loop++) {                       // then we need to put some default values in (ie between observations)
+      subm->altaz[0][loop].gpstime = (subm->subobs + loop * 4);  // populate the true gps times for the beginning, middle and end of this *sub*observation
+      subm->altaz[0][loop].Alt     = 90.0;                       // Point straight up (in degrees above horizon)
+      subm->altaz[0][loop].Az      = 0.0;                        // facing North (in compass degrees)
+      subm->altaz[0][loop].Dist_km = 0.0;                        // No 'near field' supported between observations so just use 0.
     }
 
   } else {
@@ -1574,7 +1570,8 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_col(fptr, TLONGLONG, colnum, frow, felem, 3, 0, cfitsio_J, &anynulls,
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
-      subm->altaz[loop].gpstime = cfitsio_J[loop];  // Copy each 'J' integer from the array we got from the metafits (via cfitsio) into one element of the pointing array structure
+      subm->altaz[0][loop].gpstime =
+          cfitsio_J[loop];  // Copy each 'J' integer from the array we got from the metafits (via cfitsio) into one element of the pointing array structure
     FITS_CHECK("reading gpstime column");
 
     //---------- Read and write the 'Alt' field --------
@@ -1583,7 +1580,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls,
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
-      subm->altaz[loop].Alt = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+      subm->altaz[0][loop].Alt = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Alt column");
 
     //---------- Read and write the 'Az' field --------
@@ -1592,7 +1589,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls,
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
-      subm->altaz[loop].Az = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+      subm->altaz[0][loop].Az = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Az column");
 
     //---------- Read and write the 'Dist_km' field --------
@@ -1601,21 +1598,8 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     fits_read_col(fptr, TFLOAT, colnum, frow, felem, 3, 0, cfitsio_floats, &anynulls,
                   &status);  // Read start, middle and end time values, beginning at *this* subobs in the observation
     for (int loop = 0; loop < 3; loop++)
-      subm->altaz[loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
+      subm->altaz[0][loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Dist_km column");
-
-    //---------- Now calculate the East/North/Height conversion factors for the three times --------
-
-    long double d2r = M_PIl / 180.0L;          // long double conversion factor from degrees to radians
-    long double SinAlt, CosAlt, SinAz, CosAz;  // temporary variables for storing the trig results we need to do delay tracking
-    for (int loop = 0; loop < 3; loop++) {
-      sincosl(d2r * (long double)subm->altaz[loop].Alt, &SinAlt, &CosAlt);  // Calculate the Sin and Cos of Alt in one operation.
-      sincosl(d2r * (long double)subm->altaz[loop].Az, &SinAz, &CosAz);     // Calculate the Sin and Cos of Az in one operation.
-      //
-      subm->altaz[loop].SinAzCosAlt = SinAz * CosAlt;  // this conversion factor will be multiplied by tile East
-      subm->altaz[loop].CosAzCosAlt = CosAz * CosAlt;  // this conversion factor will be multiplied by tile North
-      subm->altaz[loop].SinAlt      = SinAlt;          // this conversion factor will be multiplied by tile Height
-    }
   }
   //---------- We now have everything we need from the fits file ----------
 
@@ -1820,9 +1804,9 @@ void add_meta_fits() {
           //---------- Do Geometric delays ----------
 
           if (subm->GEODEL >= 1) {  // GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
-            delay_so_far_start_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0].Alt, subm->altaz[0].Az);
-            delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[1].Alt, subm->altaz[1].Az);
-            delay_so_far_end_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[2].Alt, subm->altaz[2].Az);
+            delay_so_far_start_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][0].Alt, subm->altaz[0][0].Az);
+            delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][1].Alt, subm->altaz[0][1].Az);
+            delay_so_far_end_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][2].Alt, subm->altaz[0][2].Az);
           }
           DEBUG_LOG("north: %Lf, east: %Lf, height: %Lf, ", rfm->North, rfm->East, rfm->Height);
           //---------- Do Calibration delays ----------
@@ -2436,6 +2420,7 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "NFINE_CHAN %lld\n", (COARSECHAN_BANDWIDTH / subm->FINECHAN_hz));
   bp += snprintf(bp, ep - bp, "BANDWIDTH_HZ %lld\n", COARSECHAN_BANDWIDTH);
   bp += snprintf(bp, ep - bp, "SAMPLE_RATE %lld\n", SAMPLES_PER_SEC);
+  bp += snprintf(bp, ep - bp, "NCOHERENT_BEAMS %d\n", subm->ncoherant_beams);
   bp += snprintf(bp, ep - bp, "MC_IP 0.0.0.0\n");
   bp += snprintf(bp, ep - bp, "MC_PORT 0\n");
   bp += snprintf(bp, ep - bp, "MC_SRC_IP 0.0.0.0\n");
@@ -2529,10 +2514,14 @@ void usage(char *err)  // Bad command line.  Report the supported usage.
   printf("%s", err);
   printf("\n\n To run:        /home/mwa/udp2sub -f mwax_u2s.conf -F mwax.conf -i 1\n\n");
 
-  printf("                    -f Configuration file to use for u2s settings\n");
-  printf("                    -F Configuration file to use for shared settings\n");
-  printf("                    -i Instance number on server, if multiple copies per server in use\n");
-  printf("                    -c Coarse channel override\n");
+  printf("                    -f <file.conf> Configuration file to use for u2s settings\n");
+  printf("                    -F <file.conf> Configuration file to use for shared settings\n");
+  printf("                    -i <number> Instance number on server, if multiple copies per server in use\n");
+  printf("                    -c <channel> Coarse channel override\n");
+  printf("                    -D <count> make up delays for D coherent beams (development only)\n");
+  printf("                    -C force cable delays\n");
+  printf("                    -G force geometric delays\n");
+  printf("                    -B force geometric delays\n");
   printf("                    -d Debug mode.  Write to .free files\n");
   fflush(stdout);
 }
@@ -2583,10 +2572,9 @@ int delaygen(uint32_t obs_id, uint32_t subobs_idx) {
   }
 
   DEBUG_LOG("NINPUTS %d\n", sub[0].NINPUTS);
-  // altaz_meta_t *altaz = subm->altaz;
+  // altaz_meta_t *altaz = subm->altaz[0];
   for (int i = 0; i < 3; i++) {
-    DEBUG_LOG("AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, SinAlt: %Lf, SinAzCosAlt: %Lf, CosAzCosAlt: %Lf, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km,
-              altaz[i].SinAlt, altaz[i].SinAzCosAlt, altaz[i].CosAzCosAlt, altaz[i].gpstime);
+    DEBUG_LOG("AltAz[%d] = {Alt: %f, Az: %f, Dist_km: %f, gpstime: %lld}\n", i, altaz[i].Alt, altaz[i].Az, altaz[i].Dist_km, altaz[i].gpstime);
   }
   fflush(stderr);
 
@@ -2686,6 +2674,12 @@ int main(int argc, char **argv) {
         ++argv;
         --argc;
         chan_override = atoi(argv[1]);
+        break;
+
+      case 'D':
+        ++argv;
+        --argc;
+        dummy_beams = atoi(argv[1]);
         break;
 
       case 'f':
