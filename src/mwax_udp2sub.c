@@ -398,16 +398,10 @@ typedef struct tile_meta {  // Structure format for the metadata associated with
   int Rx;
   int Slot;
   int Flag;
-  //    char Length[15];
-  long double Length_f;  // Floating point format version of the weird ASCII 'EL_###' length string above.
+  long double Length_f;
   long double North;
   long double East;
   long double Height;
-  int Gains[24];
-  float BFTemps;
-  int Delays[16];
-  //    int VCSOrder;
-  char Flavors[11];
 
   uint16_t rf_input;  // What's the tile & pol identifier we'll see in the udp packets for this input?
 
@@ -1509,47 +1503,6 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   FITS_CHECK("reading Height column");
   for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].Height = roundl(cfitsio_floats[loop] * 1000.0);  // Convert to long double in mm and round
 
-  //---------- Read and write the 'Gains' field --------
-
-  fits_get_colnum(fptr, CASEINSEN, "Gains", &colnum, &status);
-  // Gains is a little different because it is an array of ints. We're going to read each row (ie rf input) with a separate cfitsio call. Maybe there's a better way to do
-  // this, but I don't know it!
-  for (int loop = 0; loop < nrows; loop++) {
-    fits_read_col(fptr, TINT, colnum, loop + 1, felem, 24, 0, subm->rf_inp[metafits2sub_order[loop]].Gains, &anynulls, &status);
-  }
-  FITS_CHECK("reading Gains");
-
-  //---------- Read and write the 'BFTemps' field --------
-
-  fits_get_colnum(fptr, CASEINSEN, "BFTemps", &colnum, &status);
-  fits_read_col(fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status);
-  for (int loop = 0; loop < nrows; loop++) subm->rf_inp[metafits2sub_order[loop]].BFTemps = cfitsio_floats[loop];
-  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-  FITS_CHECK("reading BFTemps");
-
-  //---------- Read and write the 'Delays' field --------
-
-  fits_get_colnum(fptr, CASEINSEN, "Delays", &colnum, &status);
-  // Like 'Gains', this is a little different because it is an array of ints. See comments against 'Gains' for more detail
-  for (int loop = 0; loop < nrows; loop++) {
-    fits_read_col(fptr, TINT, colnum, loop + 1, felem, 16, 0, subm->rf_inp[metafits2sub_order[loop]].Delays, &anynulls, &status);
-  }
-  FITS_CHECK("reading Delays");
-
-  //---------- Read and write the 'VCSOrder' field --------
-  //
-  //        fits_get_colnum( fptr, CASEINSEN, "VCSOrder", &colnum, &status );
-  //        fits_read_col( fptr, TFLOAT, colnum, frow, felem, nrows, 0, cfitsio_floats, &anynulls, &status );
-  //        for (int loop = 0; loop < nrows; loop++) subm->rf_inp[ metafits2sub_order[loop] ].VCSOrder = cfitsio_floats[loop];            // Copy each float from the
-  //        array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
-  //
-  //---------- Read and write the 'Flavors' field --------
-
-  fits_get_colnum(fptr, CASEINSEN, "Flavors", &colnum, &status);
-  fits_read_col(fptr, TSTRING, colnum, frow, felem, nrows, 0, &cfitsio_str_ptr, &anynulls, &status);
-  for (int loop = 0; loop < nrows; loop++) strcpy(subm->rf_inp[metafits2sub_order[loop]].Flavors, cfitsio_str_ptr[loop]);
-  FITS_CHECK("reading Flavors");
-
   // Now we have read everything available from the TILEDATA HDU
   // but we want to do some conversions and calculations per tile.
   // Those can be performed by the caller.
@@ -1851,19 +1804,10 @@ void add_meta_fits() {
           //---------- Do cable delays ----------
 
           if (subm->CABLEDEL >= 1) {  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-            delay_so_far_start_mm += rfm->Length_f;   // So add in the cable delays WIP!!! or is it subtract them?
-            delay_so_far_middle_mm += rfm->Length_f;  // Cable delays apply equally at the start, middle and end of the subobservation
-            delay_so_far_end_mm += rfm->Length_f;     // so add them equally to all three delays for start, middle and end
+            delay_so_far_start_mm += rfm->Length_f;   // Cable delays apply equally at the start, middle and end of the subobservation
+            delay_so_far_middle_mm += rfm->Length_f;  // so add them equally to all three delays for start, middle and end
+            delay_so_far_end_mm += rfm->Length_f;
           }
-
-          //          if ( subm->CABLEDEL >= 2 ){  // CABLEDEL indicates: 0=Don't apply delays. 1=apply only
-          //          the cable delays. 2=apply cable delays _and_ average beamformer dipole delays.
-          //          what's the value in mm of the beamformer delays
-          //            delay_so_far_start_mm += bf_delay;
-          //            delay_so_far_middle_mm += bf_delay;                    // Cable delays apply equally at the start, middle and end
-          //            of the subobservation delay_so_far_end_mm += bf_delay; // so add them equally to all three
-          //            delays for start, middle and end
-          //          }
 
           //---------- Do Geometric delays ----------
 
@@ -1922,16 +1866,9 @@ void add_meta_fits() {
           //---------- Print out a bunch of debug info ----------
 
           if (debug_mode) {  // Debug logging to screen
-            printf("%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf,%f,%s:", subm->subobs, loop, rfm->rf_input, rfm->Input, rfm->Antenna, rfm->Tile,
-                   rfm->TileName, rfm->Pol, rfm->Rx, rfm->Slot, rfm->Flag,
-                   //            rfm->Length,
-                   rfm->Length_f, (delay_so_far_start_mm * mm2s_conv_factor), (delay_so_far_middle_mm * mm2s_conv_factor), (delay_so_far_end_mm * mm2s_conv_factor), rfm->ws_delay,
-                   rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->North, rfm->East, rfm->Height,
-                   // rfm->Gains,
-                   rfm->BFTemps,
-                   // rfm->Delays,
-                   //            rfm->VCSOrder,
-                   rfm->Flavors);
+            printf("%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d,%Lf,%Lf,%Lf,%Lf,%d,%f,%f,%f,%Lf,%Lf,%Lf:", subm->subobs, loop, rfm->rf_input, rfm->Input, rfm->Antenna, rfm->Tile,
+                   rfm->TileName, rfm->Pol, rfm->Rx, rfm->Slot, rfm->Flag, rfm->Length_f, (delay_so_far_start_mm * mm2s_conv_factor), (delay_so_far_middle_mm * mm2s_conv_factor),
+                   (delay_so_far_end_mm * mm2s_conv_factor), rfm->ws_delay, rfm->initial_delay, rfm->delta_delay, rfm->delta_delta_delay, rfm->North, rfm->East, rfm->Height);
 
             printf("\n");
           }  // Only see this if we're in debug mode
