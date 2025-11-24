@@ -256,7 +256,25 @@
 #include <fitsio.h>
 #include <stdarg.h>
 
-#define deg2rad(x) (x * M_PIl / 180L)
+#define deg2rad(x) ((x) * (M_PIl / 180L))
+#define rad2deg(x) ((x) * (180L / M_PIl))
+
+#define vcross(a, b, d)                         \
+  do {                                          \
+    (d)[0] = (a)[1] * (b)[2] - (a)[2] * (b)[1]; \
+    (d)[1] = (a)[2] * (b)[0] - (a)[0] * (b)[2]; \
+    (d)[2] = (a)[0] * (b)[1] - (a)[1] * (b)[0]; \
+  } while (0)
+#define vdot(a, b) ((a)[0] * (b)[0] + (a)[1] * (b)[1] + (a)[2] * (b)[2])
+#define vnormalise(d)                       \
+  do {                                      \
+    float rr  = vdot(d, d);                 \
+    float oor = 1.0f / (sqrtf(rr) + 1e-38); \
+    (d)[0] *= oor;                          \
+    (d)[1] *= oor;                          \
+    (d)[2] *= oor;                          \
+  } while (0)
+
 //---------------- and some new friends -------------------
 
 #define SUB_SLOTS 4
@@ -1600,6 +1618,52 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     for (int loop = 0; loop < 3; loop++)
       subm->altaz[0][loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Dist_km column");
+
+    if (dummy_beams) {
+      subm->ncoherant_beams = dummy_beams;
+      float beam[3][3];
+      float p[3] = {1.0f, 0, 0};  // north
+      float u[3][3];              // basis for offsetting beam
+      float v[3][3];              // basis for offsetting beam
+
+      for (int time_step = 0; time_step < 3; time_step++) {
+        double alt         = deg2rad(subm->altaz[0][time_step].Alt);
+        double az          = deg2rad(subm->altaz[0][time_step].Az);
+        beam[time_step][0] = (float)(cosl(az) * cosl(alt));  // north
+        beam[time_step][1] = (float)(sinl(az) * cosl(alt));  // east
+        beam[time_step][2] = (float)sinl(alt);               // up
+
+        vcross(beam[time_step], p, u[time_step]);
+        vnormalise(u[time_step]);
+        vcross(u[time_step], beam[time_step], v[time_step]);
+      }
+      for (int beam_index = 1; beam_index <= dummy_beams; beam_index++) {
+        float spacing = 0.035f;  // radians.  Around two degrees
+        float r       = sqrtf((float)beam_index + 0.5f);
+        float b       = 4.0f;
+        float du      = sin(b * r) * r * spacing / 2.0f;
+        float dv      = cos(b * r) * r * spacing / 2.0f;
+        for (int time_step = 0; time_step < 3; time_step++) {
+          float pointing[3];
+          pointing[0] = beam[time_step][0] + du * u[time_step][0] + dv * v[time_step][0];
+          pointing[1] = beam[time_step][1] + du * u[time_step][1] + dv * v[time_step][1];
+          pointing[2] = beam[time_step][2] + du * u[time_step][2] + dv * v[time_step][2];
+          float w     = sqrtf(pointing[1] * pointing[1] + pointing[0] * pointing[0]);
+
+          subm->altaz[beam_index][time_step].Az  = rad2deg(atan2f(pointing[1], pointing[0]));
+          subm->altaz[beam_index][time_step].Alt = rad2deg(atan2f(pointing[2], w));
+        }
+      }
+
+      for (int time_step = 0; time_step < 3; time_step++) {
+        printf("t=%d pointings=[", subm->subobs + 4 * time_step);
+        for (int beam_index = 0; beam_index <= dummy_beams; beam_index++) {
+          printf(" [%7.4f, %7.4f],", subm->altaz[beam_index][time_step].Alt, subm->altaz[beam_index][time_step].Az);
+          if (!beam_index) printf("  ");
+        }
+        printf("],\n");
+      }
+    }
   }
   //---------- We now have everything we need from the fits file ----------
 
@@ -2516,12 +2580,11 @@ void usage(char *err)  // Bad command line.  Report the supported usage.
 
   printf("                    -f <file.conf> Configuration file to use for u2s settings\n");
   printf("                    -F <file.conf> Configuration file to use for shared settings\n");
-  printf("                    -i <number> Instance number on server, if multiple copies per server in use\n");
-  printf("                    -c <channel> Coarse channel override\n");
-  printf("                    -D <count> make up delays for D coherent beams (development only)\n");
+  printf("                    -i <number>    Instance number on server, if multiple copies per server in use\n");
+  printf("                    -c <channel>   Coarse channel override\n");
+  printf("                    -D <count>     make up delays for <count> coherent beams (development only, maximum %d)\n", COHERENT_BEAMS_MAX);
   printf("                    -C force cable delays\n");
   printf("                    -G force geometric delays\n");
-  printf("                    -B force geometric delays\n");
   printf("                    -d Debug mode.  Write to .free files\n");
   fflush(stdout);
 }
@@ -2680,6 +2743,13 @@ int main(int argc, char **argv) {
         ++argv;
         --argc;
         dummy_beams = atoi(argv[1]);
+        if (dummy_beams > COHERENT_BEAMS_MAX) {
+          char err[80];
+          snprintf(err, sizeof(err), "Maximum number of dummy beams is %d", COHERENT_BEAMS_MAX);
+          usage(err);
+          exit(EXIT_FAILURE);
+        }
+
         break;
 
       case 'f':
