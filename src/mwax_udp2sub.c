@@ -229,6 +229,7 @@
 
 #define _GNU_SOURCE
 
+#include <assert.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -412,6 +413,8 @@ typedef struct tile_meta {  // Structure format for the metadata associated with
   double start_total_delay;
   double middle_total_delay;
   double end_total_delay;
+  long double geometric_offset_mm[3];
+  float delay_offset_in_samples[3][COHERENT_BEAMS_MAX];
 
 } tile_meta_t;
 
@@ -1811,25 +1814,34 @@ void add_meta_fits() {
 
           //---------- Do Geometric delays ----------
 
-          if (subm->GEODEL >= 1) {  // GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
-            delay_so_far_start_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][0].Alt, subm->altaz[0][0].Az);
-            delay_so_far_middle_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][1].Alt, subm->altaz[0][1].Az);
-            delay_so_far_end_mm += get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][2].Alt, subm->altaz[0][2].Az);
+          if (subm->GEODEL >= 1) {
+            // GEODEL field. (0=nothing, 1=zenith, 2=tile-pointing, 3=az/el table tracking)
+            rfm->geometric_offset_mm[0] = get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][0].Alt, subm->altaz[0][0].Az);
+            rfm->geometric_offset_mm[1] = get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][1].Alt, subm->altaz[0][1].Az);
+            rfm->geometric_offset_mm[2] = get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[0][2].Alt, subm->altaz[0][2].Az);
+            delay_so_far_start_mm += rfm->geometric_offset_mm[0];
+            delay_so_far_middle_mm += rfm->geometric_offset_mm[1];
+            delay_so_far_end_mm += rfm->geometric_offset_mm[2];
+
+            assert(subm->ncoherant_beams <= COHERENT_BEAMS_MAX);
+
+            for (int i = 0; i < subm->ncoherant_beams; i++) {
+              for (int time_step = 0; time_step < 3; time_step++) {
+                long double delta = get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[i + 1][time_step].Alt, subm->altaz[i + 1][time_step].Az) -
+                                    rfm->geometric_offset_mm[time_step];
+                rfm->delay_offset_in_samples[time_step][i] = (float)(delta * mm2s_conv_factor);
+              }
+            }
           }
-          DEBUG_LOG("north: %Lf, east: %Lf, height: %Lf, ", rfm->North, rfm->East, rfm->Height);
-          //---------- Do Calibration delays ----------
-          //   WIP.  Calibration delays are just a dream right now
 
           //---------- Convert 'start', 'middle' and 'end' delays from millimetres to samples --------
 
           long double start_sub_s  = delay_so_far_start_mm * mm2s_conv_factor;   // Convert start delay into samples at the coarse channel sample rate
           long double middle_sub_s = delay_so_far_middle_mm * mm2s_conv_factor;  // Convert middle delay into samples at the coarse channel sample rate
           long double end_sub_s    = delay_so_far_end_mm * mm2s_conv_factor;     // Convert end delay into samples at the coarse channel sample rate
-          DEBUG_LOG("start: %Lf, middle: %Lf, end: %Lf, ", start_sub_s, middle_sub_s, end_sub_s);
           //---------- Commit to a whole sample delay and calculate the residuals --------
 
-          long double whole_sample_delay =
-              roundl(middle_sub_s);  // Pick a whole sample delay.  Use the rounded version of the middle delay for now. NB: seems to need -lm for linking
+          long double whole_sample_delay = roundl(middle_sub_s);  // Pick a whole sample delay.
           // This will be corrected for by shifting coarse channel samples forward and backward in time by whole samples
 
           start_sub_s -= whole_sample_delay;   // Remove the whole sample we're using for this subobs to leave the residual delay that will be done by phase turning
@@ -2196,15 +2208,26 @@ void *makesub() {
         char *delay_table2_start = dest;
 
         delay_table2_entry_t *delay_table2_entry = (delay_table2_entry_t *)dest;
-        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {  // The zeroth block is the size of the padded number of inputs times SUB_LINE_SIZE.  NB: We dodn't pad any more!
-          rfm = &subm->rf_inp[MandC_rf];                      // Get a temp pointer for this tile's metadata
-
-          delay_table2_entry->rf_input           = rfm->rf_input;  // Copy the tile's ID and polarization into the structure we're about to write to the sub file's 0th block
-          delay_table2_entry->ws_delay           = rfm->ws_delay;  // Copy the tile's whole sample delay value into the structure we're about to write to the sub file's 0th block
+        for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
+          rfm                                    = &subm->rf_inp[MandC_rf];
+          delay_table2_entry->rf_input           = rfm->rf_input;  // the tile's ID and polarization
+          delay_table2_entry->ws_delay           = rfm->ws_delay;  // the tile's whole sample delay value
           delay_table2_entry->start_total_delay  = (float)rfm->start_total_delay;
           delay_table2_entry->middle_total_delay = (float)rfm->middle_total_delay;
           delay_table2_entry->end_total_delay    = (float)rfm->end_total_delay;
           delay_table2_entry++;
+        }
+        for (int i = 0; i < subm->ncoherant_beams; i++) {
+          for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
+            rfm = &subm->rf_inp[MandC_rf];
+
+            delay_table2_entry->rf_input           = rfm->rf_input;
+            delay_table2_entry->ws_delay           = 0;
+            delay_table2_entry->start_total_delay  = rfm->delay_offset_in_samples[0][i];
+            delay_table2_entry->middle_total_delay = rfm->delay_offset_in_samples[1][i];
+            delay_table2_entry->end_total_delay    = rfm->delay_offset_in_samples[2][i];
+            delay_table2_entry++;
+          }
         }
         dest = (char *)delay_table2_entry;
 
