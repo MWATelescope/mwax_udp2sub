@@ -330,7 +330,7 @@
 #define MWA_PACKET_TYPE_LEGACY 0x20        // 0x20 == Legacy Mode  2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format).
 #define MWA_PACKET_TYPE_OVERSAMPLING 0x30  // 0x30 == Oversampling Mode 2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format)
 
-#define COHERENT_BEAMS_MAX 10
+#define COHERENT_BEAMS_MAX 30
 
 // In legacy mode, there are 625 packets per second and 2048 samples per packet. This results in 1.28M samples per second.
 // In oversampling mode, there are 800 packets per second and 2048 samples per packet. This results in 1.6384M samples per second.
@@ -1594,11 +1594,12 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
         vcross(u[time_step], beam[time_step], v[time_step]);
       }
       for (int beam_index = 1; beam_index <= dummy_beams; beam_index++) {
-        float spacing = 0.035f;  // radians.  Around two degrees
-        float r       = sqrtf((float)beam_index + 0.5f);
-        float b       = 4.0f;
-        float du      = sin(b * r) * r * spacing / 2.0f;
-        float dv      = cos(b * r) * r * spacing / 2.0f;
+        float spacing = 1.5f;                            // degrees between beams
+        float t       = sqrtf((float)(beam_index - 1));  // beam 1 uses the correlation pointing center.
+        float th      = t * 4.0f;
+        float r       = t * spacing / 100.0f;
+        float du      = sin(th) * r;
+        float dv      = cos(th) * r;
         for (int time_step = 0; time_step < 3; time_step++) {
           float pointing[3];
           pointing[0] = beam[time_step][0] + du * u[time_step][0] + dv * v[time_step][0];
