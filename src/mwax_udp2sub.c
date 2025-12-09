@@ -1350,7 +1350,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     }
   }
 
-  sub->ncoherant_beams = 0;
+  subm->ncoherant_beams = 0;
 
   subm->COARSE_CHAN = subm->CHANNELS[conf.coarse_chan - 1];  // conf.coarse_chan numbers are 1 to 24 inclusive, but the array index is 0 to 23 incl.
 
