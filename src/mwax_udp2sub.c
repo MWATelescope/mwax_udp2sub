@@ -1595,10 +1595,10 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
         vcross(u[time_step], beam[time_step], v[time_step]);
       }
       for (int beam_index = 1; beam_index <= dummy_beams; beam_index++) {
-        float spacing = 1.5f;                            // degrees between beams
+        float spacing = 1.5f * M_PI / 180.0;             // degrees between beams
         float t       = sqrtf((float)(beam_index - 1));  // beam 1 uses the correlation pointing center.
         float th      = t * 4.0f;
-        float r       = t * spacing / 100.0f;
+        float r       = t * spacing * 0.573;
         float du      = sin(th) * r;
         float dv      = cos(th) * r;
         for (int time_step = 0; time_step < 3; time_step++) {
