@@ -315,6 +315,11 @@
 #define MONITOR_PORT 8007
 #define MONITOR_TTL 3
 
+#define PARSE_CHECK(check, MSG) \
+  if (!(check)) {               \
+    fprintf(stderr, MSG);       \
+    return false;               \
+  }
 #define FITS_CHECK(OP)                                      \
   if (status) {                                             \
     fprintf(stderr, "Error in metafits access (%s): ", OP); \
@@ -1533,6 +1538,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       subm->altaz[0][loop].Az      = 0.0;                        // facing North (in compass degrees)
       subm->altaz[0][loop].Dist_km = 0.0;                        // No 'near field' supported between observations so just use 0.
     }
+    printf("Using zenith pointing\n");
 
   } else {
     // We know from the condition test above that we have 3 valid pointings available to read from the metafits 3rd HDU
@@ -1576,7 +1582,65 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       subm->altaz[0][loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Dist_km column");
 
-    if (dummy_beams) {
+    // now see if we also have coherent beam pointings
+    fits_movnam_hdu(fptr, IMAGE_HDU, "BEAMALTAZ", 0, &status);
+    if (status == BAD_HDU_NUM) {
+      printf("No BEAMALTAZ HDU present\n");
+      fflush(stdout);
+      status = 0;  // ignore this error, as this HDU is optional.
+    } else {
+      FITS_CHECK("Moving to BEAMALTAZ HDU");
+      // note that this *only* contains the beams - the pointing for the correlation centre is in the ALTAZ HDU
+
+      int naxis; /* This variable will store the number of dimensions */
+      int bitpix;
+      long naxes[3];
+      fits_get_img_param(fptr, 3, &bitpix, &naxis, naxes, &status);
+      FITS_CHECK("checking BEAMALTAZ dimensionality");
+      PARSE_CHECK(naxis == 3, "BEAMALTAZ wrong dimensionality");
+      PARSE_CHECK(bitpix == -64, "BEAMALTAZ wrong datatype");
+      PARSE_CHECK(naxes[1] > 0, "need at least one beam if BEAMALTAZ is present");
+      PARSE_CHECK(naxes[0] == 3, "first dim should be 3 to select alt,az,dist");
+      int beam_count = naxes[1];
+      long fpixel[3] = {1, 1, frow};            /* Start: X=1, Y=1, Time=frow */
+      long lpixel[3] = {3, naxes[1], frow + 2}; /* End: X=3, Y=20, Time=frow+2 */
+      long inc[3]    = {1, 1, 1};               /* Increment by 1 in all dimensions */
+                                                /* The size of the output array needs to match the dimensions being read: 3x20x3 */
+      long naxes_read[3] = {3, naxes[1], 3};
+      long total_pixels  = naxes_read[0] * naxes_read[1] * naxes_read[2];
+
+      /* Dynamically allocate the destination array */
+      double *subset_data = (double *)malloc(total_pixels * sizeof(double));
+
+      if (!subset_data) {
+        printf("Memory allocation failed.\n");
+        return false;
+      }
+
+      /* Read the specified subset of data */
+      /* The '0' argument means 'read all pixels', regardless of null values */
+      fits_read_subset(fptr, TDOUBLE, fpixel, lpixel, inc, NULL, subset_data, 0, &status);
+      if (status) free(subset_data);  // don't leak memory if the read failed.
+      FITS_CHECK("reading BEAMALTAZ subsection for current subobservation");
+      if (beam_count > COHERENT_BEAMS_MAX) {
+        printf("WARNING: Too many coherent beams (%d) in this subobservation, only using the first %d\n", beam_count, COHERENT_BEAMS_MAX);
+        beam_count = COHERENT_BEAMS_MAX;
+      }
+      subm->ncoherant_beams = beam_count;
+      for (int beam_index = 0; beam_index < beam_count; beam_index++) {
+        for (int time_step = 0; time_step < 3; time_step++) {
+          subm->altaz[beam_index + 1][time_step].Alt     = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 0];
+          subm->altaz[beam_index + 1][time_step].Az      = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 1];
+          subm->altaz[beam_index + 1][time_step].Dist_km = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 2];
+          subm->altaz[beam_index + 1][time_step].gpstime = subm->altaz[0][time_step].gpstime;
+        }
+      }
+
+      free(subset_data);
+    }
+
+    if (dummy_beams > 0 && subm->ncoherant_beams == 0) {  // only add dummy beams if we there was no BEALMALTAZ HDU
+      printf("adding %d dummy beams\n", dummy_beams);
       subm->ncoherant_beams = dummy_beams;
       float beam[3][3];
       float p[3] = {1.0f, 0, 0};  // north
@@ -1608,20 +1672,22 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
           pointing[2] = beam[time_step][2] + du * u[time_step][2] + dv * v[time_step][2];
           float w     = sqrtf(pointing[1] * pointing[1] + pointing[0] * pointing[0]);
 
-          subm->altaz[beam_index][time_step].Az  = rad2deg(atan2f(pointing[1], pointing[0]));
-          subm->altaz[beam_index][time_step].Alt = rad2deg(atan2f(pointing[2], w));
+          subm->altaz[beam_index][time_step].Az      = rad2deg(atan2f(pointing[1], pointing[0]));
+          subm->altaz[beam_index][time_step].Alt     = rad2deg(atan2f(pointing[2], w));
+          subm->altaz[beam_index][time_step].Dist_km = 0.0f;
+          subm->altaz[beam_index][time_step].gpstime = subm->altaz[0][time_step].gpstime;
         }
-      }
-
-      for (int time_step = 0; time_step < 3; time_step++) {
-        printf("t=%d pointings=[", subm->subobs + 4 * time_step);
-        for (int beam_index = 0; beam_index <= dummy_beams; beam_index++) {
-          printf(" [%7.4f, %7.4f],", subm->altaz[beam_index][time_step].Alt, subm->altaz[beam_index][time_step].Az);
-          if (!beam_index) printf("  ");
-        }
-        printf("],\n");
       }
     }
+    printf("Pointings:\n");
+    for (int beam_index = 0; beam_index <= subm->ncoherant_beams; beam_index++) {
+      for (int time_step = 0; time_step < 3; time_step++) {
+        printf("| %10.7f %10.7f %6.4f %ld ", subm->altaz[beam_index][time_step].Alt, subm->altaz[beam_index][time_step].Az, subm->altaz[beam_index][time_step].Dist_km,
+               subm->altaz[beam_index][time_step].gpstime);
+      }
+      printf("|\n");
+    }
+    printf("\n");
   }
   //---------- We now have everything we need from the fits file ----------
 
@@ -1651,11 +1717,15 @@ void test_read_metafits(int tdi) {
     char *fnam;
     uint32_t subobs;
   } test_data[] = {
-      {"/home/mwa/incident/1408332144_metafits.fits", 1408332145},
-      {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
+      {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},  {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16},
+      {"/home/mwa/incident/1408332144_metafits.fits", 1408332145}, {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
       {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
 
   };
+  printf("\n\ntdi = %d\n", tdi);
+  printf("fnam = %s\n", test_data[tdi].fnam);
+  fflush(stdout);
+
   sub.subobs = test_data[tdi].subobs;
   bool ok    = read_metafits(test_data[tdi].fnam, &sub);
   printf("read_metafits(\"%s\", &sub) returned %s\n\n", test_data[tdi].fnam, ok ? "true" : "false");
@@ -2776,6 +2846,7 @@ int main(int argc, char **argv) {
     usage("");     // Print the available options
     exit(EXIT_FAILURE);
   }
+  printf("configured for %d dummy beams\n", dummy_beams);
 
   //---------------- Look up our configuration options ------------------------
 
