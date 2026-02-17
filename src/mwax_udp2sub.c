@@ -6,9 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 99
-#define THISVER "2.21f"
+#define BUILD 100
+#define THISVER "2.22"
 //
+// 2.22-100     2026-02-17 CJP  parse the incoherent beam id mapping and include it in the subfile header.
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
 // 2.20-098     2025-11-26 CJP  New delay table format
 // 2.19-097     2025-02-24 CJP  quieter logging
