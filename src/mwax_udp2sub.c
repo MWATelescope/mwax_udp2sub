@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 99
-#define THISVER "2.21e"
+#define THISVER "2.21f"
 //
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
 // 2.20-098     2025-11-26 CJP  New delay table format
@@ -2497,6 +2497,15 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "MC_PORT 0\n");
   bp += snprintf(bp, ep - bp, "MC_SRC_IP 0.0.0.0\n");
   bp += snprintf(bp, ep - bp, "MWAX_U2S_VER " THISVER "-%d\n", BUILD);
+
+  if (subm->ncoherant_beams > 0) {
+    bp += snprintf(bp, ep - bp, "INCOHERENT_BEAM_IDS %d", subm->beam_number[0]);
+    for (int i = 1; i < subm->ncoherant_beams; i++) {
+      bp += snprintf(bp, ep - bp, ",%d", subm->beam_number[i]);
+    }
+    bp += snprintf(bp, ep - bp, "\n");
+  }
+
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
   bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 3\n");
 }
