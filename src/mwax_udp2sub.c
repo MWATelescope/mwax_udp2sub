@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 99
-#define THISVER "2.21"
+#define THISVER "2.21e"
 //
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
 // 2.20-098     2025-11-26 CJP  New delay table format
@@ -488,6 +488,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
                                    // NOT the order udp packets were seen in.
 
   altaz_meta_t altaz[1 + COHERENT_BEAMS_MAX][3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
+  int beam_number[COHERENT_BEAMS_MAX];            // table mapping delay table indices to beam numbers.
 
 } subobs_udp_meta_t;
 
@@ -1573,6 +1574,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
     } else {
       FITS_CHECK("Moving to BEAMALTAZ HDU");
       // note that this *only* contains the beams - the pointing for the correlation centre is in the ALTAZ HDU
+      // TODO - ensure this doesn't fail if there are zero incoherent beams
 
       int naxis; /* This variable will store the number of dimensions */
       int bitpix;
@@ -1619,15 +1621,47 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       }
 
       free(subset_data);
+
+      if (subm->ncoherant_beams > 0) {
+        frow  = 1;
+        felem = 1;
+        // if we have voltage beams, we need to include the mapping from beam index to beam number
+        fits_movnam_hdu(fptr, BINARY_TBL, "VOLTAGEBEAMS", 0, &status);
+        FITS_CHECK("Moving to VOLTAGEBEAMS HDU");
+        long nrows;
+        fits_get_num_rows(fptr, &nrows, &status);  // How many rows (times) are written to the metafits?
+        DEBUG_LOG("row cont in VOLTAGEBEAMS HDU=%ld\n", nrows);
+
+        int beam_number[nrows];
+        fits_get_colnum(fptr, CASEINSEN, "number", &colnum, &status);
+        fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, beam_number, &anynulls, &status);
+        FITS_CHECK("reading number column from VOLTAGEBEAMS HDU");
+
+        int beam_index[nrows];
+        fits_get_colnum(fptr, CASEINSEN, "beam_index", &colnum, &status);
+        static int _default = 999;
+        fits_read_col(fptr, TINT, colnum, frow, felem, nrows, &_default, beam_index, &anynulls, &status);
+        FITS_CHECK("reading beam_index column from VOLTAGEBEAMS HDU");
+        for (int i = 0; i < nrows; i++) {
+          int index = beam_index[i];
+          if ((unsigned)index < COHERENT_BEAMS_MAX) {
+            subm->beam_number[index] = beam_number[i];
+          }
+        }
+      }
     }
 
     printf("Pointings:\n");
-    for (int beam_index = 0; beam_index <= subm->ncoherant_beams; beam_index++) {
+    for (int beam_index_plus_1 = 0; beam_index_plus_1 <= subm->ncoherant_beams; beam_index_plus_1++) {
       for (int time_step = 0; time_step < 3; time_step++) {
-        printf("| %10.7f %10.7f %6.4f %ld ", subm->altaz[beam_index][time_step].Alt, subm->altaz[beam_index][time_step].Az, subm->altaz[beam_index][time_step].Dist_km,
-               subm->altaz[beam_index][time_step].gpstime);
+        printf("| %10.7f %10.7f %6.4f %ld ", subm->altaz[beam_index_plus_1][time_step].Alt, subm->altaz[beam_index_plus_1][time_step].Az,
+               subm->altaz[beam_index_plus_1][time_step].Dist_km, subm->altaz[beam_index_plus_1][time_step].gpstime);
       }
-      printf("|\n");
+      if (beam_index_plus_1 > 0) {
+        printf("| (beam #%02d)\n", subm->beam_number[beam_index_plus_1 - 1]);
+      } else {
+        printf("|\n");
+      }
     }
     printf("\n");
   }
