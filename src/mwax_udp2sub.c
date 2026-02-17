@@ -550,7 +550,6 @@ char *sub_header;        // Pointer to a buffer that's the size of a sub file he
 bool debug_mode         = false;  // Default to not being in debug mode
 bool force_cable_delays = false;  // Always apply cable delays, regardless of metafits
 bool force_geo_delays   = false;  // Always apply geometric delays, regardless of metafits
-int dummy_beams         = 0;      // synthesise this many dummy coherent beams for testing purposes
 
 //---------------------------------------------------------------------------------------------------------------------------------------------------
 // read_config - use our hostname and a command line parameter to find ourselves in the list of possible configurations
@@ -1640,46 +1639,6 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       free(subset_data);
     }
 
-    if (dummy_beams > 0 && subm->ncoherant_beams == 0) {  // only add dummy beams if we there was no BEALMALTAZ HDU
-      printf("adding %d dummy beams\n", dummy_beams);
-      subm->ncoherant_beams = dummy_beams;
-      float beam[3][3];
-      float p[3] = {1.0f, 0, 0};  // north
-      float u[3][3];              // basis for offsetting beam
-      float v[3][3];              // basis for offsetting beam
-
-      for (int time_step = 0; time_step < 3; time_step++) {
-        double alt         = deg2rad(subm->altaz[0][time_step].Alt);
-        double az          = deg2rad(subm->altaz[0][time_step].Az);
-        beam[time_step][0] = (float)(cosl(az) * cosl(alt));  // north
-        beam[time_step][1] = (float)(sinl(az) * cosl(alt));  // east
-        beam[time_step][2] = (float)sinl(alt);               // up
-
-        vcross(beam[time_step], p, u[time_step]);
-        vnormalise(u[time_step]);
-        vcross(u[time_step], beam[time_step], v[time_step]);
-      }
-      for (int beam_index = 1; beam_index <= dummy_beams; beam_index++) {
-        float spacing = 1.5f * M_PI / 180.0;             // degrees between beams
-        float t       = sqrtf((float)(beam_index - 1));  // beam 1 uses the correlation pointing center.
-        float th      = t * 4.0f;
-        float r       = t * spacing * 0.573;
-        float du      = sin(th) * r;
-        float dv      = cos(th) * r;
-        for (int time_step = 0; time_step < 3; time_step++) {
-          float pointing[3];
-          pointing[0] = beam[time_step][0] + du * u[time_step][0] + dv * v[time_step][0];
-          pointing[1] = beam[time_step][1] + du * u[time_step][1] + dv * v[time_step][1];
-          pointing[2] = beam[time_step][2] + du * u[time_step][2] + dv * v[time_step][2];
-          float w     = sqrtf(pointing[1] * pointing[1] + pointing[0] * pointing[0]);
-
-          subm->altaz[beam_index][time_step].Az      = rad2deg(atan2f(pointing[1], pointing[0]));
-          subm->altaz[beam_index][time_step].Alt     = rad2deg(atan2f(pointing[2], w));
-          subm->altaz[beam_index][time_step].Dist_km = 0.0f;
-          subm->altaz[beam_index][time_step].gpstime = subm->altaz[0][time_step].gpstime;
-        }
-      }
-    }
     printf("Pointings:\n");
     for (int beam_index = 0; beam_index <= subm->ncoherant_beams; beam_index++) {
       for (int time_step = 0; time_step < 3; time_step++) {
@@ -2615,7 +2574,6 @@ void usage(char *err)  // Bad command line.  Report the supported usage.
   printf("                    -F <file.conf> Configuration file to use for shared settings\n");
   printf("                    -i <number>    Instance number on server, if multiple copies per server in use\n");
   printf("                    -c <channel>   Coarse channel override\n");
-  printf("                    -D <count>     make up delays for <count> coherent beams (development only, maximum %d)\n", COHERENT_BEAMS_MAX);
   printf("                    -C force cable delays\n");
   printf("                    -G force geometric delays\n");
   printf("                    -d Debug mode.  Write to .free files\n");
@@ -2772,19 +2730,6 @@ int main(int argc, char **argv) {
         chan_override = atoi(argv[1]);
         break;
 
-      case 'D':
-        ++argv;
-        --argc;
-        dummy_beams = atoi(argv[1]);
-        if (dummy_beams > COHERENT_BEAMS_MAX) {
-          char err[80];
-          snprintf(err, sizeof(err), "Maximum number of dummy beams is %d", COHERENT_BEAMS_MAX);
-          usage(err);
-          exit(EXIT_FAILURE);
-        }
-
-        break;
-
       case 'f':
         ++argv;
         --argc;
@@ -2847,7 +2792,6 @@ int main(int argc, char **argv) {
     usage("");     // Print the available options
     exit(EXIT_FAILURE);
   }
-  printf("configured for %d dummy beams\n", dummy_beams);
 
   //---------------- Look up our configuration options ------------------------
 
