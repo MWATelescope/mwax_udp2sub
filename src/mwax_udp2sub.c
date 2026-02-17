@@ -262,24 +262,6 @@
 #define deg2rad(x) ((x) * (M_PIl / 180L))
 #define rad2deg(x) ((x) * (180L / M_PIl))
 
-#define vcross(a, b, d)                         \
-  do {                                          \
-    (d)[0] = (a)[1] * (b)[2] - (a)[2] * (b)[1]; \
-    (d)[1] = (a)[2] * (b)[0] - (a)[0] * (b)[2]; \
-    (d)[2] = (a)[0] * (b)[1] - (a)[1] * (b)[0]; \
-  } while (0)
-#define vdot(a, b) ((a)[0] * (b)[0] + (a)[1] * (b)[1] + (a)[2] * (b)[2])
-#define vnormalise(d)                       \
-  do {                                      \
-    float rr  = vdot(d, d);                 \
-    float oor = 1.0f / (sqrtf(rr) + 1e-38); \
-    (d)[0] *= oor;                          \
-    (d)[1] *= oor;                          \
-    (d)[2] *= oor;                          \
-  } while (0)
-
-//---------------- and some new friends -------------------
-
 #define SUB_SLOTS 4
 #define MAX_INPUTS (544LL)
 #define UDP_PAYLOAD_SIZE (4096LL)
