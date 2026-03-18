@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 100
-#define THISVER "2.22"
+#define THISVER "2.22a"
 //
 // 2.22-100     2026-02-17 CJP  parse the incoherent beam id mapping and include it in the subfile header.
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
@@ -490,6 +490,11 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
 
   altaz_meta_t altaz[1 + COHERENT_BEAMS_MAX][3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
   int beam_number[COHERENT_BEAMS_MAX];            // table mapping delay table indices to beam numbers.
+
+  float beam_RA[COHERENT_BEAMS_MAX]; // these are the initial pointings for each beam.
+  float beam_DEC[COHERENT_BEAMS_MAX]; // the code currently assumes that the 0th is the pointing center
+  float beam_ALT[COHERENT_BEAMS_MAX]; // and the rest are the n coherent beams, possily permuted.
+  float beam_AZ[COHERENT_BEAMS_MAX];  // we only use the zeroth entry at the moment.
 
 } subobs_udp_meta_t;
 
@@ -1623,6 +1628,31 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
 
       free(subset_data);
 
+      //  now to read alt/az/ra/dec at the start of each observation, for each beam,
+      // They look like this:
+      /*
+B00_SRA =    125.1099208333333 / Beam 0 RA at observation start
+B00_SDEC=   -13.84884722222222 / Beam 0 Dec at observation start
+B00_SALT=     68.2157086392619 / Beam 0 Alt at observation start
+B00_SAZ =     302.162899456259 / Beam 0 Az at observation start
+B01_SRA =           124.109924 / Beam 1 RA at observation start
+B01_SDEC=           -14.848847 / Beam 1 Dec at observation start
+B01_SALT=    68.04594565860236 / Beam 1 Alt at observation start
+B01_SAZ =    298.4522299216484 / Beam 1 Az at observation start
+       * */
+      for (int i = 0; i <= subm->ncoherant_beams; i++) {
+        char key[100];
+        sprintf(key, "B%02d_SRA", i);
+        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_RA[i]), NULL, &status);
+        sprintf(key, "B%02d_SDEC", i);
+        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_DEC[i]), NULL, &status);
+        sprintf(key, "B%02d_SALT", i);
+        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_ALT[i]), NULL, &status);
+        sprintf(key, "B%02d_SAZ", i);
+        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_AZ[i]), NULL, &status);
+        printf("Reading beam initial pointing %d: RA=%.7f, DEC=%.7f, ALT=%.7f, AZ=%.7f\n", i, subm->beam_RA[i], subm->beam_DEC[i], subm->beam_ALT[i], subm->beam_AZ[i]);
+      }
+
       if (subm->ncoherant_beams > 0) {
         frow  = 1;
         felem = 1;
@@ -1697,6 +1727,7 @@ void test_read_metafits(int tdi) {
       {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},  {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16},
       {"/home/mwa/incident/1408332144_metafits.fits", 1408332145}, {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
       {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
+    {"/home/mwa/metafits/1457366416_metafits.fits", 1457366416}
 
   };
   printf("\n\ntdi = %d\n", tdi);
@@ -2500,12 +2531,13 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "MWAX_U2S_VER " THISVER "-%d\n", BUILD);
 
   if (subm->ncoherant_beams > 0) {
-    bp += snprintf(bp, ep - bp, "INCOHERENT_BEAM_IDS %d", subm->beam_number[0]);
+    bp += snprintf(bp, ep - bp, "COHERENT_BEAM_IDS %d", subm->beam_number[0]);
     for (int i = 1; i < subm->ncoherant_beams; i++) {
       bp += snprintf(bp, ep - bp, ",%d", subm->beam_number[i]);
     }
     bp += snprintf(bp, ep - bp, "\n");
   }
+  bp += snprintf(bp, ep - bp, "BEAM_POINTING_00 %.7f,%.7f,%.7f,%.7f\n", subm->beam_RA[0], subm->beam_DEC[0], subm->beam_ALT[0], subm->beam_AZ[0]);
 
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
   bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 3\n");
