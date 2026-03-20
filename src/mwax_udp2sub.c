@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 100
-#define THISVER "2.22a"
+#define THISVER "2.22b"
 //
 // 2.22-100     2026-02-17 CJP  parse the incoherent beam id mapping and include it in the subfile header.
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
@@ -491,10 +491,10 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   altaz_meta_t altaz[1 + COHERENT_BEAMS_MAX][3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
   int beam_number[COHERENT_BEAMS_MAX];            // table mapping delay table indices to beam numbers.
 
-  float beam_RA[COHERENT_BEAMS_MAX]; // these are the initial pointings for each beam.
-  float beam_DEC[COHERENT_BEAMS_MAX]; // the code currently assumes that the 0th is the pointing center
-  float beam_ALT[COHERENT_BEAMS_MAX]; // and the rest are the n coherent beams, possily permuted.
-  float beam_AZ[COHERENT_BEAMS_MAX];  // we only use the zeroth entry at the moment.
+  float beam_RA[COHERENT_BEAMS_MAX];   // these are the initial pointings for each beam.
+  float beam_DEC[COHERENT_BEAMS_MAX];  // the code currently assumes that the 0th is the pointing center
+  float beam_ALT[COHERENT_BEAMS_MAX];  // and the rest are the n coherent beams, possily permuted.
+  float beam_AZ[COHERENT_BEAMS_MAX];   // we only use the zeroth entry at the moment.
 
 } subobs_udp_meta_t;
 
@@ -1629,17 +1629,6 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       free(subset_data);
 
       //  now to read alt/az/ra/dec at the start of each observation, for each beam,
-      // They look like this:
-      /*
-B00_SRA =    125.1099208333333 / Beam 0 RA at observation start
-B00_SDEC=   -13.84884722222222 / Beam 0 Dec at observation start
-B00_SALT=     68.2157086392619 / Beam 0 Alt at observation start
-B00_SAZ =     302.162899456259 / Beam 0 Az at observation start
-B01_SRA =           124.109924 / Beam 1 RA at observation start
-B01_SDEC=           -14.848847 / Beam 1 Dec at observation start
-B01_SALT=    68.04594565860236 / Beam 1 Alt at observation start
-B01_SAZ =    298.4522299216484 / Beam 1 Az at observation start
-       * */
       for (int i = 0; i <= subm->ncoherant_beams; i++) {
         char key[100];
         sprintf(key, "B%02d_SRA", i);
@@ -1723,11 +1712,10 @@ void test_read_metafits(int tdi) {
   struct {
     char *fnam;
     uint32_t subobs;
-  } test_data[] = {
-      {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},  {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16},
-      {"/home/mwa/incident/1408332144_metafits.fits", 1408332145}, {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
-      {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
-    {"/home/mwa/metafits/1457366416_metafits.fits", 1457366416}
+  } test_data[] = {{"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},  {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16},
+                   {"/home/mwa/incident/1408332144_metafits.fits", 1408332145}, {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
+                   {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
+                   {"/home/mwa/metafits/1457366416_metafits.fits", 1457366416}
 
   };
   printf("\n\ntdi = %d\n", tdi);
@@ -2495,6 +2483,7 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   char *ep = sub_header + SUBFILE_HEADER_SIZE;
   bp += snprintf(bp, ep - bp, "HDR_SIZE %lld\n", SUBFILE_HEADER_SIZE);
   bp += snprintf(bp, ep - bp, "POPULATED 1\n");
+  bp += snprintf(bp, ep - bp, "NAME %s\n", subm->FILENAME);
   bp += snprintf(bp, ep - bp, "OBS_ID %ld\n", subm->GPSTIME);
   bp += snprintf(bp, ep - bp, "SUBOBS_ID %d\n", subm->subobs);
   bp += snprintf(bp, ep - bp, "MODE %s\n", subm->MODE);
@@ -2540,7 +2529,7 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "BEAM_POINTING_00 %.7f,%.7f,%.7f,%.7f\n", subm->beam_RA[0], subm->beam_DEC[0], subm->beam_ALT[0], subm->beam_AZ[0]);
 
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
-  bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 3\n");
+  bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 4\n");
 }
 
 void *heartbeat() {
