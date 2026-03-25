@@ -7,7 +7,7 @@
 // Commenced 2017-05-25
 //
 #define BUILD 100
-#define THISVER "2.22b"
+#define THISVER "2.22c"
 //
 // 2.22-100     2026-02-17 CJP  parse the incoherent beam id mapping and include it in the subfile header.
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
@@ -475,7 +475,8 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   int COARSE_CHAN;
   int FINECHAN_hz;
   int INTTIME_msec;
-  int ncoherant_beams;
+  int num_coherent_beams;  // number of coherant beams
+  int num_beams;           // total number of beams, both coherant and incoherent
 
   uint16_t rf_seen;        // The number of different rf_input sources seen so far this sub observation
   uint16_t rf2ndx[65536];  // A mapping from the rf_input value to what row in the pointer array its pointers are stored
@@ -490,7 +491,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
                                    // NOT the order udp packets were seen in.
 
   altaz_meta_t altaz[1 + COHERENT_BEAMS_MAX][3];  // The AltAz at the beginning, middle and end of the 8 second sub-observation
-  int beam_number[COHERENT_BEAMS_MAX];            // table mapping delay table indices to beam numbers.
+  int cbi_to_beam_number[COHERENT_BEAMS_MAX];     // table mapping delay table indices to beam numbers.
 
   float beam_RA[COHERENT_BEAMS_MAX];   // these are the initial pointings for each beam.
   float beam_DEC[COHERENT_BEAMS_MAX];  // the code currently assumes that the 0th is the pointing center
@@ -1257,6 +1258,137 @@ int fits_read_key_verbose(fitsfile *fptr, int datatype, const char *keyname, cha
   return res;
 }
 
+// only present for beamforming observations
+bool parse_voltagebeams_hdu(subobs_udp_meta_t *subm, fitsfile *fptr) {
+  int status = 0;
+  fits_movnam_hdu(fptr, BINARY_TBL, "VOLTAGEBEAMS", 0, &status);
+  if (status == BAD_HDU_NUM) {
+    printf("No VOLTAGEBEAMS HDU present\n");
+    fflush(stdout);
+    return true;
+  }
+  FITS_CHECK("Moving to VOLTAGEBEAMS HDU");
+
+  int colnum;
+  int anynulls;
+  long num_beams;
+  fits_get_num_rows(fptr, &num_beams, &status);
+  DEBUG_LOG("row count in VOLTAGEBEAMS HDU=%ld\n", nrows);
+  subm->num_beams = num_beams;
+
+  int beam_number[num_beams];
+  fits_get_colnum(fptr, CASEINSEN, "number", &colnum, &status);
+  fits_read_col(fptr, TINT, colnum, 1, 1, num_beams, 0, beam_number, &anynulls, &status);
+  FITS_CHECK("reading number column from VOLTAGEBEAMS HDU");
+
+  int beam_index[num_beams];
+  fits_get_colnum(fptr, CASEINSEN, "beam_index", &colnum, &status);
+  static int _default = 999;
+  fits_read_col(fptr, TINT, colnum, 1, 1, num_beams, &_default, beam_index, &anynulls, &status);
+  FITS_CHECK("reading beam_index column from VOLTAGEBEAMS HDU");
+  for (int i = 0; i < num_beams; i++) {
+    int index = beam_index[i];
+    if ((unsigned)index < COHERENT_BEAMS_MAX) {
+      subm->cbi_to_beam_number[index] = beam_number[i];
+    }
+  }
+
+  {
+    long repeat, width;
+    int typecode;
+    char *nullstr = "";
+
+    fits_get_colnum(fptr, CASEINSEN, "target_name", &colnum, &status);
+    fits_get_coltype(fptr, colnum, &typecode, &repeat, &width, &status);
+    PARSE_CHECK(num_beams <= COHERENT_BEAMS_MAX, "too many beams in VOLTAGEBEAMS HDU");
+    PARSE_CHECK(repeat <= MAX_TARGET_NAME_LEN, "FITS string column is wider than MAX_TARGET_NAME_LEN");
+
+    for (int i = 0; i < num_beams; i++) {
+      char *ptr = subm->beam_target_name[i];
+      fits_read_col(fptr, TSTRING, colnum, i + 1, 1, 1, &nullstr, &ptr, &anynulls, &status);
+      FITS_CHECK("reading target_name column from VOLTAGEBEAMS HDU");
+      for (size_t j = strlen(ptr) - 1; j >= 0 && ' ' == ptr[j]; j--) {
+        ptr[j] = '\0';
+      }
+    }
+  }
+  return true;
+}
+
+// only present if we have one or more coherent beams
+bool parse_beamaltaz_hdu(subobs_udp_meta_t *subm, fitsfile *fptr, int frow) {
+  int status = 0;
+  fits_movnam_hdu(fptr, IMAGE_HDU, "BEAMALTAZ", 0, &status);
+  if (status == BAD_HDU_NUM) {
+    printf("No BEAMALTAZ HDU present\n");
+    fflush(stdout);
+    return true;
+  }
+  FITS_CHECK("Moving to BEAMALTAZ HDU");
+  // note that this *only* contains the beams - the pointing for the correlation centre is in the ALTAZ HDU
+  // TODO - ensure this doesn't fail if there are zero incoherent beams
+
+  int naxis; /* This variable will store the number of dimensions */
+  int bitpix;
+  long naxes[3];
+  fits_get_img_param(fptr, 3, &bitpix, &naxis, naxes, &status);
+  FITS_CHECK("checking BEAMALTAZ dimensionality");
+  PARSE_CHECK(naxis == 3, "BEAMALTAZ wrong dimensionality");
+  PARSE_CHECK(bitpix == -64, "BEAMALTAZ wrong datatype");
+  PARSE_CHECK(naxes[1] > 0, "need at least one beam if BEAMALTAZ is present");
+  PARSE_CHECK(naxes[0] == 3, "first dim should be 3 to select alt,az,dist");
+  int beam_count = naxes[1];
+  long fpixel[3] = {1, 1, frow};            /* Start: X=1, Y=1, Time=frow */
+  long lpixel[3] = {3, naxes[1], frow + 2}; /* End: X=3, Y=20, Time=frow+2 */
+  long inc[3]    = {1, 1, 1};               /* Increment by 1 in all dimensions */
+  /* The size of the output array needs to match the dimensions being read: 3x20x3 */
+  long naxes_read[3] = {3, naxes[1], 3};
+  long total_pixels  = naxes_read[0] * naxes_read[1] * naxes_read[2];
+
+  /* Dynamically allocate the destination array */
+  double *subset_data = (double *)malloc(total_pixels * sizeof(double));
+
+  if (!subset_data) {
+    printf("Memory allocation failed.\n");
+    return false;
+  }
+
+  /* Read the specified subset of data */
+  /* The '0' argument means 'read all pixels', regardless of null values */
+  fits_read_subset(fptr, TDOUBLE, fpixel, lpixel, inc, NULL, subset_data, 0, &status);
+  if (status) free(subset_data);  // don't leak memory if the read failed.
+  FITS_CHECK("reading BEAMALTAZ subsection for current subobservation");
+  if (beam_count > COHERENT_BEAMS_MAX) {
+    printf("WARNING: Too many coherent beams (%d) in this subobservation, only using the first %d\n", beam_count, COHERENT_BEAMS_MAX);
+    beam_count = COHERENT_BEAMS_MAX;
+  }
+  subm->num_coherent_beams = beam_count;
+  for (int beam_index = 0; beam_index < beam_count; beam_index++) {
+    for (int time_step = 0; time_step < 3; time_step++) {
+      subm->altaz[beam_index + 1][time_step].Alt     = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 0];
+      subm->altaz[beam_index + 1][time_step].Az      = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 1];
+      subm->altaz[beam_index + 1][time_step].Dist_km = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 2];
+      subm->altaz[beam_index + 1][time_step].gpstime = subm->altaz[0][time_step].gpstime;
+    }
+  }
+
+  free(subset_data);
+
+  //  now to read alt/az/ra/dec at the start of each observation, for each beam,
+  for (int i = 0; i <= subm->num_coherent_beams; i++) {
+    char key[100];
+    sprintf(key, "B%02d_SRA", i);
+    fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_RA[i]), NULL, &status);
+    sprintf(key, "B%02d_SDEC", i);
+    fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_DEC[i]), NULL, &status);
+    sprintf(key, "B%02d_SALT", i);
+    fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_ALT[i]), NULL, &status);
+    sprintf(key, "B%02d_SAZ", i);
+    fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_AZ[i]), NULL, &status);
+    printf("Reading beam initial pointing %d: RA=%.7f, DEC=%.7f, ALT=%.7f, AZ=%.7f\n", i, subm->beam_RA[i], subm->beam_DEC[i], subm->beam_ALT[i], subm->beam_AZ[i]);
+  }
+  return true;
+}
 bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
   // preconditions:
   //     subm->subobs >= subm->GPSTIME (the latter as read from the metafits_file, theoretically should be same as the number in the filename)
@@ -1345,8 +1477,6 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       }
     }
   }
-
-  subm->ncoherant_beams = 0;
 
   subm->COARSE_CHAN = subm->CHANNELS[conf.coarse_chan - 1];  // conf.coarse_chan numbers are 1 to 24 inclusive, but the array index is 0 to 23 incl.
 
@@ -1573,136 +1703,19 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       subm->altaz[0][loop].Dist_km = cfitsio_floats[loop];  // Copy each float from the array we got from the metafits (via cfitsio) into one element of the rf_inp array structure
     FITS_CHECK("reading Dist_km column");
 
-    // now see if we also have coherent beam pointings
-    fits_movnam_hdu(fptr, IMAGE_HDU, "BEAMALTAZ", 0, &status);
-    if (status == BAD_HDU_NUM) {
-      printf("No BEAMALTAZ HDU present\n");
-      fflush(stdout);
-      status = 0;  // ignore this error, as this HDU is optional.
-    } else {
-      FITS_CHECK("Moving to BEAMALTAZ HDU");
-      // note that this *only* contains the beams - the pointing for the correlation centre is in the ALTAZ HDU
-      // TODO - ensure this doesn't fail if there are zero incoherent beams
-
-      int naxis; /* This variable will store the number of dimensions */
-      int bitpix;
-      long naxes[3];
-      fits_get_img_param(fptr, 3, &bitpix, &naxis, naxes, &status);
-      FITS_CHECK("checking BEAMALTAZ dimensionality");
-      PARSE_CHECK(naxis == 3, "BEAMALTAZ wrong dimensionality");
-      PARSE_CHECK(bitpix == -64, "BEAMALTAZ wrong datatype");
-      PARSE_CHECK(naxes[1] > 0, "need at least one beam if BEAMALTAZ is present");
-      PARSE_CHECK(naxes[0] == 3, "first dim should be 3 to select alt,az,dist");
-      int beam_count = naxes[1];
-      long fpixel[3] = {1, 1, frow};            /* Start: X=1, Y=1, Time=frow */
-      long lpixel[3] = {3, naxes[1], frow + 2}; /* End: X=3, Y=20, Time=frow+2 */
-      long inc[3]    = {1, 1, 1};               /* Increment by 1 in all dimensions */
-      /* The size of the output array needs to match the dimensions being read: 3x20x3 */
-      long naxes_read[3] = {3, naxes[1], 3};
-      long total_pixels  = naxes_read[0] * naxes_read[1] * naxes_read[2];
-
-      /* Dynamically allocate the destination array */
-      double *subset_data = (double *)malloc(total_pixels * sizeof(double));
-
-      if (!subset_data) {
-        printf("Memory allocation failed.\n");
-        return false;
-      }
-
-      /* Read the specified subset of data */
-      /* The '0' argument means 'read all pixels', regardless of null values */
-      fits_read_subset(fptr, TDOUBLE, fpixel, lpixel, inc, NULL, subset_data, 0, &status);
-      if (status) free(subset_data);  // don't leak memory if the read failed.
-      FITS_CHECK("reading BEAMALTAZ subsection for current subobservation");
-      if (beam_count > COHERENT_BEAMS_MAX) {
-        printf("WARNING: Too many coherent beams (%d) in this subobservation, only using the first %d\n", beam_count, COHERENT_BEAMS_MAX);
-        beam_count = COHERENT_BEAMS_MAX;
-      }
-      subm->ncoherant_beams = beam_count;
-      for (int beam_index = 0; beam_index < beam_count; beam_index++) {
-        for (int time_step = 0; time_step < 3; time_step++) {
-          subm->altaz[beam_index + 1][time_step].Alt     = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 0];
-          subm->altaz[beam_index + 1][time_step].Az      = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 1];
-          subm->altaz[beam_index + 1][time_step].Dist_km = (float)subset_data[time_step * naxes_read[1] * 3 + beam_index * 3 + 2];
-          subm->altaz[beam_index + 1][time_step].gpstime = subm->altaz[0][time_step].gpstime;
-        }
-      }
-
-      free(subset_data);
-
-      //  now to read alt/az/ra/dec at the start of each observation, for each beam,
-      for (int i = 0; i <= subm->ncoherant_beams; i++) {
-        char key[100];
-        sprintf(key, "B%02d_SRA", i);
-        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_RA[i]), NULL, &status);
-        sprintf(key, "B%02d_SDEC", i);
-        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_DEC[i]), NULL, &status);
-        sprintf(key, "B%02d_SALT", i);
-        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_ALT[i]), NULL, &status);
-        sprintf(key, "B%02d_SAZ", i);
-        fits_read_key_verbose(fptr, TFLOAT, key, NULL, &(subm->beam_AZ[i]), NULL, &status);
-        printf("Reading beam initial pointing %d: RA=%.7f, DEC=%.7f, ALT=%.7f, AZ=%.7f\n", i, subm->beam_RA[i], subm->beam_DEC[i], subm->beam_ALT[i], subm->beam_AZ[i]);
-      }
-
-      if (subm->ncoherant_beams > 0) {
-        frow  = 1;
-        felem = 1;
-        // if we have voltage beams, we need to include the mapping from beam index to beam number
-        fits_movnam_hdu(fptr, BINARY_TBL, "VOLTAGEBEAMS", 0, &status);
-        FITS_CHECK("Moving to VOLTAGEBEAMS HDU");
-        long nrows;
-        fits_get_num_rows(fptr, &nrows, &status);  // How many rows (times) are written to the metafits?
-        DEBUG_LOG("row cont in VOLTAGEBEAMS HDU=%ld\n", nrows);
-
-        int beam_number[nrows];
-        fits_get_colnum(fptr, CASEINSEN, "number", &colnum, &status);
-        fits_read_col(fptr, TINT, colnum, frow, felem, nrows, 0, beam_number, &anynulls, &status);
-        FITS_CHECK("reading number column from VOLTAGEBEAMS HDU");
-
-        int beam_index[nrows];
-        fits_get_colnum(fptr, CASEINSEN, "beam_index", &colnum, &status);
-        static int _default = 999;
-        fits_read_col(fptr, TINT, colnum, frow, felem, nrows, &_default, beam_index, &anynulls, &status);
-        FITS_CHECK("reading beam_index column from VOLTAGEBEAMS HDU");
-        for (int i = 0; i < nrows; i++) {
-          int index = beam_index[i];
-          if ((unsigned)index < COHERENT_BEAMS_MAX) {
-            subm->beam_number[index] = beam_number[i];
-          }
-        }
-
-        {
-          long repeat, width;
-          int typecode;
-          char *nullstr = "";
-
-          fits_get_colnum(fptr, CASEINSEN, "target_name", &colnum, &status);
-          fits_get_coltype(fptr, colnum, &typecode, &repeat, &width, &status);
-          printf("repeat = %ld, mtl = %d\n", repeat, MAX_TARGET_NAME_LEN);
-          PARSE_CHECK(nrows <= COHERENT_BEAMS_MAX, "too many beams in VOLTAGEBEAMS HDU");
-          PARSE_CHECK(repeat <= MAX_TARGET_NAME_LEN, "FITS string column is wider than MAX_TARGET_NAME_LEN");
-
-          for (int i = 0; i < nrows; i++) {
-            char *ptr = subm->beam_target_name[i];
-            fits_read_col(fptr, TSTRING, colnum, i + 1, 1, 1, &nullstr, &ptr, &anynulls, &status);
-            FITS_CHECK("reading target_name column from VOLTAGEBEAMS HDU");
-            for (size_t j = strlen(ptr) - 1; j >= 0 && ' ' == ptr[j]; j--) {
-              ptr[j] = '\0';
-            }
-          }
-        }
-      }
-    }
+    // these only return false on error, not if HDU is absent.
+    if (!parse_voltagebeams_hdu(subm, fptr)) return false;
+    if (!parse_beamaltaz_hdu(subm, fptr, frow)) return false;
 
     printf("Pointings:\n");
-    for (int beam_index_plus_1 = 0; beam_index_plus_1 <= subm->ncoherant_beams; beam_index_plus_1++) {
+    for (int beam_index_plus_1 = 0; beam_index_plus_1 <= subm->num_coherent_beams; beam_index_plus_1++) {
       for (int time_step = 0; time_step < 3; time_step++) {
         printf("| %10.7f %10.7f %6.4f %ld ", subm->altaz[beam_index_plus_1][time_step].Alt, subm->altaz[beam_index_plus_1][time_step].Az,
                subm->altaz[beam_index_plus_1][time_step].Dist_km, subm->altaz[beam_index_plus_1][time_step].gpstime);
       }
       printf("| %s", subm->beam_target_name[beam_index_plus_1]);
       if (beam_index_plus_1 > 0) {
-        printf(" | (beam #%02d)\n", subm->beam_number[beam_index_plus_1 - 1]);
+        printf(" | (beam #%02d)\n", subm->cbi_to_beam_number[beam_index_plus_1 - 1]);
       } else {
         printf(" |\n");
       }
@@ -1915,9 +1928,9 @@ void add_meta_fits() {
             delay_so_far_middle_mm += rfm->geometric_offset_mm[1];
             delay_so_far_end_mm += rfm->geometric_offset_mm[2];
 
-            assert(subm->ncoherant_beams <= COHERENT_BEAMS_MAX);
+            assert(subm->num_coherent_beams <= COHERENT_BEAMS_MAX);
 
-            for (int i = 0; i < subm->ncoherant_beams; i++) {
+            for (int i = 0; i < subm->num_coherent_beams; i++) {
               for (int time_step = 0; time_step < 3; time_step++) {
                 long double delta = get_path_difference(rfm->North, rfm->East, rfm->Height, subm->altaz[i + 1][time_step].Alt, subm->altaz[i + 1][time_step].Az) -
                                     rfm->geometric_offset_mm[time_step];
@@ -2309,7 +2322,7 @@ void *makesub() {
           delay_table2_entry->end_total_delay    = (float)rfm->end_total_delay;
           delay_table2_entry++;
         }
-        for (int i = 0; i < subm->ncoherant_beams; i++) {
+        for (int i = 0; i < subm->num_coherent_beams; i++) {
           for (MandC_rf = 0; MandC_rf < ninputs; MandC_rf++) {
             rfm = &subm->rf_inp[MandC_rf];
 
@@ -2537,20 +2550,25 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
   bp += snprintf(bp, ep - bp, "NFINE_CHAN %lld\n", (COARSECHAN_BANDWIDTH / subm->FINECHAN_hz));
   bp += snprintf(bp, ep - bp, "BANDWIDTH_HZ %lld\n", COARSECHAN_BANDWIDTH);
   bp += snprintf(bp, ep - bp, "SAMPLE_RATE %lld\n", SAMPLES_PER_SEC);
-  bp += snprintf(bp, ep - bp, "NCOHERENT_BEAMS %d\n", subm->ncoherant_beams);
+  bp += snprintf(bp, ep - bp, "NCOHERENT_BEAMS %d\n", subm->num_coherent_beams);
   bp += snprintf(bp, ep - bp, "MC_IP 0.0.0.0\n");
   bp += snprintf(bp, ep - bp, "MC_PORT 0\n");
   bp += snprintf(bp, ep - bp, "MC_SRC_IP 0.0.0.0\n");
   bp += snprintf(bp, ep - bp, "MWAX_U2S_VER " THISVER "-%d\n", BUILD);
 
-  if (subm->ncoherant_beams > 0) {
-    bp += snprintf(bp, ep - bp, "COHERENT_BEAM_IDS %d", subm->beam_number[0]);
-    for (int i = 1; i < subm->ncoherant_beams; i++) {
-      bp += snprintf(bp, ep - bp, ",%d", subm->beam_number[i]);
+  if (subm->num_coherent_beams > 0) {
+    bp += snprintf(bp, ep - bp, "COHERENT_BEAM_IDS %d", subm->cbi_to_beam_number[0]);
+    for (int i = 1; i < subm->num_coherent_beams; i++) {
+      bp += snprintf(bp, ep - bp, ",%d", subm->cbi_to_beam_number[i]);
     }
     bp += snprintf(bp, ep - bp, "\n");
   }
-  bp += snprintf(bp, ep - bp, "BEAM_POINTING_00 %.7f,%.7f,%.7f,%.7f\n", subm->beam_RA[0], subm->beam_DEC[0], subm->beam_ALT[0], subm->beam_AZ[0]);
+  for (int i = 0; i < subm->num_beams; i++) {
+    bp += snprintf(bp, ep - bp, "BEAM_POINTING_%02d %.7f,%.7f,%.7f,%.7f\n", i, subm->beam_RA[0], subm->beam_DEC[0], subm->beam_ALT[0], subm->beam_AZ[0]);
+  }
+  for (int i = 0; i < subm->num_beams; i++) {
+    bp += snprintf(bp, ep - bp, "BEAM_TARGET_NAME_%02d %s\n", i, subm->beam_target_name[i]);
+  }
 
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
   bp += snprintf(bp, ep - bp, "MWAX_SUB_VER 4\n");
@@ -2768,6 +2786,8 @@ void *calloc_or_die(size_t nmemb, size_t size, char *name) {
 // ------------------------ Start of world -------------------------
 
 int main(int argc, char **argv) {
+  // test_read_metafits(5);
+  // return 0;
   int prog_build = BUILD;  // Build number.  Remember to update each build revision!
 
   //---------------- Parse command line parameters ------------------------
