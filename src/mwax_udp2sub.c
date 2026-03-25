@@ -301,7 +301,7 @@
 
 #define PARSE_CHECK(check, MSG) \
   if (!(check)) {               \
-    fprintf(stderr, MSG);       \
+    fprintf(stderr, MSG "\n");  \
     return false;               \
   }
 #define FITS_CHECK(OP)                                      \
@@ -321,6 +321,7 @@
 #define MWA_PACKET_TYPE_OVERSAMPLING 0x30  // 0x30 == Oversampling Mode 2K samples of Voltage Data in complex 8 bit real + 8 bit imaginary format)
 
 #define COHERENT_BEAMS_MAX 30
+#define MAX_TARGET_NAME_LEN 250
 
 // In legacy mode, there are 625 packets per second and 2048 samples per packet. This results in 1.28M samples per second.
 // In oversampling mode, there are 800 packets per second and 2048 samples per packet. This results in 1.6384M samples per second.
@@ -495,6 +496,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   float beam_DEC[COHERENT_BEAMS_MAX];  // the code currently assumes that the 0th is the pointing center
   float beam_ALT[COHERENT_BEAMS_MAX];  // and the rest are the n coherent beams, possily permuted.
   float beam_AZ[COHERENT_BEAMS_MAX];   // we only use the zeroth entry at the moment.
+  char beam_target_name[COHERENT_BEAMS_MAX][MAX_TARGET_NAME_LEN];
 
 } subobs_udp_meta_t;
 
@@ -1595,7 +1597,7 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
       long fpixel[3] = {1, 1, frow};            /* Start: X=1, Y=1, Time=frow */
       long lpixel[3] = {3, naxes[1], frow + 2}; /* End: X=3, Y=20, Time=frow+2 */
       long inc[3]    = {1, 1, 1};               /* Increment by 1 in all dimensions */
-                                                /* The size of the output array needs to match the dimensions being read: 3x20x3 */
+      /* The size of the output array needs to match the dimensions being read: 3x20x3 */
       long naxes_read[3] = {3, naxes[1], 3};
       long total_pixels  = naxes_read[0] * naxes_read[1] * naxes_read[2];
 
@@ -1668,6 +1670,27 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
             subm->beam_number[index] = beam_number[i];
           }
         }
+
+        {
+          long repeat, width;
+          int typecode;
+          char *nullstr = "";
+
+          fits_get_colnum(fptr, CASEINSEN, "target_name", &colnum, &status);
+          fits_get_coltype(fptr, colnum, &typecode, &repeat, &width, &status);
+          printf("repeat = %ld, mtl = %d\n", repeat, MAX_TARGET_NAME_LEN);
+          PARSE_CHECK(nrows <= COHERENT_BEAMS_MAX, "too many beams in VOLTAGEBEAMS HDU");
+          PARSE_CHECK(repeat <= MAX_TARGET_NAME_LEN, "FITS string column is wider than MAX_TARGET_NAME_LEN");
+
+          for (int i = 0; i < nrows; i++) {
+            char *ptr = subm->beam_target_name[i];
+            fits_read_col(fptr, TSTRING, colnum, i + 1, 1, 1, &nullstr, &ptr, &anynulls, &status);
+            FITS_CHECK("reading target_name column from VOLTAGEBEAMS HDU");
+            for (size_t j = strlen(ptr) - 1; j >= 0 && ' ' == ptr[j]; j--) {
+              ptr[j] = '\0';
+            }
+          }
+        }
       }
     }
 
@@ -1677,10 +1700,11 @@ bool read_metafits(const char *metafits_file, subobs_udp_meta_t *subm) {
         printf("| %10.7f %10.7f %6.4f %ld ", subm->altaz[beam_index_plus_1][time_step].Alt, subm->altaz[beam_index_plus_1][time_step].Az,
                subm->altaz[beam_index_plus_1][time_step].Dist_km, subm->altaz[beam_index_plus_1][time_step].gpstime);
       }
+      printf("| %s", subm->beam_target_name[beam_index_plus_1]);
       if (beam_index_plus_1 > 0) {
-        printf("| (beam #%02d)\n", subm->beam_number[beam_index_plus_1 - 1]);
+        printf(" | (beam #%02d)\n", subm->beam_number[beam_index_plus_1 - 1]);
       } else {
-        printf("|\n");
+        printf(" |\n");
       }
     }
     printf("\n");
