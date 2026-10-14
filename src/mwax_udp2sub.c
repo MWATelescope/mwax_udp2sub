@@ -300,10 +300,10 @@
 #define MONITOR_PORT 8007
 #define MONITOR_TTL 3
 
-#define PARSE_CHECK(check, MSG) \
-  if (!(check)) {               \
-    fprintf(stderr, MSG "\n");  \
-    return false;               \
+#define PARSE_CHECK(check, MSG, ...)          \
+  if (!(check)) {                             \
+    fprintf(stderr, MSG "\n", ##__VA_ARGS__); \
+    return false;                             \
   }
 #define FITS_CHECK(OP)                                      \
   if (status) {                                             \
