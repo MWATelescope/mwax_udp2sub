@@ -498,7 +498,7 @@ typedef struct subobs_udp_meta {  // Structure format for the MWA subobservation
   float beam_DEC[COHERENT_BEAMS_MAX];  // the code currently assumes that the 0th is the pointing center
   float beam_ALT[COHERENT_BEAMS_MAX];  // and the rest are the n coherent beams, possily permuted.
   float beam_AZ[COHERENT_BEAMS_MAX];   // we only use the zeroth entry at the moment.
-  char beam_target_name[COHERENT_BEAMS_MAX][MAX_TARGET_NAME_LEN];
+  char beam_target_name[COHERENT_BEAMS_MAX][MAX_TARGET_NAME_LEN + 1];
 
 } subobs_udp_meta_t;
 
@@ -1301,8 +1301,8 @@ bool parse_voltagebeams_hdu(subobs_udp_meta_t *subm, fitsfile *fptr) {
 
     fits_get_colnum(fptr, CASEINSEN, "target_name", &colnum, &status);
     fits_get_coltype(fptr, colnum, &typecode, &repeat, &width, &status);
-    PARSE_CHECK(num_beams <= COHERENT_BEAMS_MAX, "too many beams in VOLTAGEBEAMS HDU");
-    PARSE_CHECK(repeat <= MAX_TARGET_NAME_LEN, "FITS string column is wider than MAX_TARGET_NAME_LEN");
+    PARSE_CHECK(num_beams <= COHERENT_BEAMS_MAX, "too many beams in VOLTAGEBEAMS HDU (%ld>%d)", num_beams, COHERENT_BEAMS_MAX);
+    PARSE_CHECK(repeat <= MAX_TARGET_NAME_LEN, "FITS target_name column is (at %ld chars) wider than MAX_TARGET_NAME_LEN of %d", repeat, MAX_TARGET_NAME_LEN);
 
     for (int i = 0; i < num_beams; i++) {
       char *ptr = subm->beam_target_name[i];
