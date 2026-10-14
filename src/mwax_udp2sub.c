@@ -1306,11 +1306,16 @@ bool parse_voltagebeams_hdu(subobs_udp_meta_t *subm, fitsfile *fptr) {
 
     for (int i = 0; i < num_beams; i++) {
       char *ptr = subm->beam_target_name[i];
-      fits_read_col(fptr, TSTRING, colnum, i + 1, 1, 1, &nullstr, &ptr, &anynulls, &status);
+      fits_read_col(fptr, TSTRING, colnum, i + 1, 1, 1, nullstr, &ptr, &anynulls, &status);
       FITS_CHECK("reading target_name column from VOLTAGEBEAMS HDU");
-      for (size_t j = strlen(ptr) - 1; j >= 0 && ' ' == ptr[j]; j--) {
+      for (size_t j = strlen(ptr); j-- > 0 && ' ' == ptr[j];) {
         ptr[j] = '\0';
       }
+      if (i == 0 && ptr[0] == 0) {
+        printf("target_name column for beam 0 in VOLTAGEBEAMS HDU is empty, overriding with 'unknown'\n");
+        strcpy(ptr, "unknown");
+      }
+      printf("read target_name for beam %d as `%s`\n", i, ptr);
     }
   }
   return true;
@@ -1750,10 +1755,11 @@ void test_read_metafits(int tdi) {
   struct {
     char *fnam;
     uint32_t subobs;
-  } test_data[] = {{"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},  {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16},
-                   {"/home/mwa/incident/1408332144_metafits.fits", 1408332145}, {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},
-                   {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // current, ok
-                   {"/home/mwa/metafits/1457366416_metafits.fits", 1457366416}
+  } test_data[] = {
+      {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664},                                                                    // 0
+      {"/voltdata/test_data/1448844664_vbtest.fits", 1448844664 + 16}, {"/home/mwa/incident/1408332144_metafits.fits", 1408332145},  // 2
+      {"/home/mwa/incident/1408313944_metafits.fits", 1408313945},     {"/home/mwa/incident/1408693944_metafits.fits", 1408693945},  // 4 current, ok
+      {"/home/mwa/metafits/1457366416_metafits.fits", 1457366416},     {"/voltdata/test_data/1475872816_metafits.fits", 1475872816}  // 6
 
   };
   printf("\n\ntdi = %d\n", tdi);
@@ -2568,7 +2574,10 @@ void build_subfile_header(const subobs_udp_meta_t *subm, size_t transfer_size, i
     bp += snprintf(bp, ep - bp, "BEAM_POINTING_%02d %.7f,%.7f,%.7f,%.7f\n", i, subm->beam_RA[0], subm->beam_DEC[0], subm->beam_ALT[0], subm->beam_AZ[0]);
   }
   for (int i = 0; i < subm->num_beams; i++) {
-    bp += snprintf(bp, ep - bp, "BEAM_TARGET_NAME_%02d %s\n", i, subm->beam_target_name[i]);
+    const char *name = subm->beam_target_name[i];
+    if (name[0] != 0) {
+      bp += snprintf(bp, ep - bp, "BEAM_TARGET_NAME_%02d %s\n", i, subm->beam_target_name[i]);
+    }
   }
 
   for (int i = 0; i < n_data_sections; i++) bp += snprintf(bp, ep - bp, "IDX_%s %d+%d\n", data_sections[i].name, data_sections[i].offset, data_sections[i].length);
@@ -2787,7 +2796,7 @@ void *calloc_or_die(size_t nmemb, size_t size, char *name) {
 // ------------------------ Start of world -------------------------
 
 int main(int argc, char **argv) {
-  // test_read_metafits(5);
+  // test_read_metafits(6);
   // return 0;
   int prog_build = BUILD;  // Build number.  Remember to update each build revision!
 
