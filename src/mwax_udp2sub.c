@@ -6,9 +6,10 @@
 //            CJP Christopher Phillips christopher.j.phillips@curtin.edu.au
 // Commenced 2017-05-25
 //
-#define BUILD 101
-#define THISVER "2.23"
+#define BUILD 102
+#define THISVER "2.24"
 //
+// 2.24-102     2026-04-01 CJP  missing target_name fallback, name parsing bugfixes.
 // 2.23-101     2026-04-01 CJP  pass through incoherent src_name
 // 2.22-100     2026-02-17 CJP  parse the incoherent beam id mapping and include it in the subfile header.
 // 2.21-099     2025-12-11 CJP  reading BEAMALTAZ HDU from metafits and generating delays for specified beams.
